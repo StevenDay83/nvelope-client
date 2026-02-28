@@ -1,0 +1,11 @@
+{
+    "name": "nvelope-client",
+    "version": "1.0.0",
+    "main": "main.js",
+    "devDependencies": {
+        "electron": "^40.6.1"
+    },
+    "scripts": {
+        "start": "electron ."
+    }
+}
