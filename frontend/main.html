@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="./styles/bootstrap.css">
+    <script src="./script/button.js"></script>
+    <script src="./script/svg.js"></script>
+    <title>nVelope v0.1.0</title>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col">
+            <button id="getMailBtn" hidden></button>
+            <div class="vr"></div>
+            <button id="newMailBtn" hidden></button>
+            <button id="replyMailBtn" hidden></button>
+            <button id="forwardMailBtn" hidden></button>
+            <button id="deleteMailBtn" hidden></button>
+        </div>
+            <div class="col">
+                <div class="input-group mb-3">
+                    <input type="text" class="form-control" placeholder="Search..." aria-label="Search"
+                        aria-describedby="button-addon2">
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-3">
+                <ul class="list-group">
+                    <li class="list-group-item">
+                        <span>
+                            <i>wolfbearclaw@nostr.messagepush.io</i>
+                        </span>
+                    </li>
+                    <li>
+                        <ul class="list-group list-group-flush">
+                            <li class="list-group-item">Inbox</li>
+                            <li class="list-group-item">Drafts</li>
+                            <li class="list-group-item">Sent</li>
+                            <li class="list-group-item">Outbox</li>
+                        </ul>
+                    </li>
+
+                </ul>
+            </div>
+            <div class="col-8">Email List and Preview Pane</div>
+        </div>
+    </div>
+    <script>
+        let getMailButton = new nVelopeButton('getMailBtn');
+        let newMailButton = new nVelopeButton('newMailBtn');
+        let replyMailButton = new nVelopeButton('replyMailBtn');
+        let forwardMailButton = new nVelopeButton('forwardMailBtn');
+        let deleteMailButton = new nVelopeButton('deleteMailBtn');
+
+        getMailButton.setButtonLabel(GET_MAIL + "Get Mail");
+        getMailButton.setStylePrimary();
+        
+        newMailButton.setButtonLabel(ENVELOPE + "New Message");
+        newMailButton.setBtnStyle('btn-light');
+        
+        replyMailButton.setButtonLabel(REPLY + "Reply");
+        replyMailButton.setBtnStyle('btn-light');
+        
+        forwardMailButton.setButtonLabel(FORWARD + "Forward");
+        forwardMailButton.setBtnStyle('btn-light');
+
+        deleteMailButton.setButtonLabel(DELETE + "Delete");
+        deleteMailButton.setBtnStyle('btn-light');
+
+        getMailButton.show();
+        newMailButton.show();
+        replyMailButton.show();
+        forwardMailButton.show();
+        deleteMailButton.show();
+
+    </script>
+</body>
+</html>
