@@ -1,17 +1,29 @@
-const Cache = require('./cache.js');
+const { Cache, NEW_VALUE, CHANGE_VALUE, DELETE_VALUE }= require('./cache.js');
 
 class CacheHandler {
-    constructor(){
-        this.cacheObject = new Cache();
+    constructor(thisCache){
+        this.cacheObject = thisCache ? thisCache : new Cache();
+        this.cacheObject.addAtomicChangeListener("this", this.triggerAtomicCacheAction);
+        this.listenerCache = {
+            add:{},
+            change:{},
+            delete:{}
+        };
     }
 
-    initializeCache(){
-        this.cacheObject = new Cache();
+    initializeCacheSync(){
+    }
+
+    async initializeCache(callback){
+        return new Promise(async (resolve, reject) => {
+            callback ? callback(true) : resolve(true);
+        });    
     }
 
     setCacheValueNoPersistence(key, value){
         // Set value in Cache object only
         this.cacheObject.setValue(key, value);
+        return true;
     }
 
     setCacheValue(key, value) {
@@ -19,8 +31,14 @@ class CacheHandler {
         this.setCacheValueNoPersistence(key, value);
     }
 
-    getCacheValue(key) {
-        this.cacheObject.getValue(key);
+    async getCacheValue(key, callback) {
+        return new Promise(async (resolve, reject) => {
+            callback ? callback(this.cacheObject.getValue(key)) : resolve(this.cacheObject.getValue(key));
+        });
+    }
+
+    getCacheValueNoPersistence(key) {
+        return this.cacheObject.getValue(key);
     }
 
     getCacheValueByAttributes(searchAttributes) {}
@@ -64,4 +82,55 @@ class CacheHandler {
     deleteCacheValue(key) {
         return this.cacheObject.deleteValue(key);
     }
+
+    addCacheListenerOnAddCache(listenerId, callback){
+        if (listenerId && typeof(listenerId) === 'string' && callback && typeof(callback) === 'function'){
+            this.listenerCache.add[listenerId] = callback;
+        }
+    }
+
+    addCacheListenerOnRemoveCache(listenerId, callback){
+        if (listenerId && typeof(listenerId) === 'string' && callback && typeof(callback) === 'function'){
+            this.listenerCache.delete[listenerId] = callback;
+        }
+    }
+
+    addCacheListenerOnAtomicChangeCache(listenerId, callback){
+        if (listenerId && typeof(listenerId) === 'string' && callback && typeof(callback) === 'function'){
+            this.listenerCache.change[listenerId] = callback;
+        }
+    }
+
+    removeCacheListenerOnAddCache(listenerId){
+        delete this.listenerCache.add[listenerId];
+    }
+
+    removeCacheListenerOnRemoveCache(listenerId){
+        delete this.listenerCache.delete[listenerId];
+
+    }
+
+    removeCacheListenerOnAtomicChangeCache(listenerId){
+        delete this.listenerCache.change[listenerId];
+    }
+
+    triggerAtomicCacheAction(action, value){
+        let listenerFunctions;
+        if (action == NEW_VALUE) {
+            listenerFunctions = Object.values(this.listenerCache.add);
+        } else if (action == CHANGE_VALUE){
+            listenerFunctions = Object.values(this.listenerCache.change);
+        } else if (action == DELETE_VALUE){
+            listenerFunctions = Object.values(this.listenerCache.delete);
+        }
+
+        if (listenerFunctions){
+            for (let i = 0; i < listenerFunctions.length; i++){
+                let thisCallback = listenerFunctions[i];
+                thisCallback(value);
+            }
+        }
+    }
 }
+
+module.exports.CacheHandler = CacheHandler;
