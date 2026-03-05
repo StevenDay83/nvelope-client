@@ -45,6 +45,7 @@ class CacheHandler {
 
     getCacheValuesOrderThan(timeValue) {
         let cacheArray = [];
+        let keys = [];
 
         if (timeValue && !isNaN(timeValue) && timeValue > Date.now()){
             let cacheKeys = Object.keys(this.cacheObject.cacheTable);
@@ -54,11 +55,12 @@ class CacheHandler {
 
                 if (thisTimeStamp && thisTimeStamp < timeValue){
                     cacheArray.push(this.cacheObject.getValue(cacheKeys[i]));
+                    keys.push(cacheKeys[i]);
                 }
             }
         }
 
-        return cacheArray;
+        return [cacheArray, keys];
     }
 
     getCacheValuesNewerThan(timeValue) {
@@ -79,8 +81,14 @@ class CacheHandler {
         return cacheArray;
     }
 
-    deleteCacheValue(key) {
+    deleteCacheValueNoPersistence(key) {
         return this.cacheObject.deleteValue(key);
+    }
+
+    async deleteCacheValue(key) {
+        return new Promise(async (resolve, reject) => {
+            resolve(this.deleteCacheValueNoPersistence(key));
+        });
     }
 
     addCacheListenerOnAddCache(listenerId, callback){

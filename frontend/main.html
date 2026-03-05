@@ -6,6 +6,7 @@
     <link rel="stylesheet" href="./styles/bootstrap.css">
     <script type="module" src="./script/md-block.js"></script>
     <script src="./script/button.js"></script>
+    <script src="./script/emailtablelist.js"></script>
     <script src="./script/svg.js"></script>
     <style>
         .table-wrapper {
@@ -39,15 +40,15 @@
                 <ul class="list-group">
                     <li class="list-group-item">
                         <span>
-                            <i>wolfbearclaw@nostr.messagepush.io</i>
+                            <p class="fw-semibold fs-6 lh-sm">wolfbearclaw@nostr.messagepush.io</p>
                         </span>
                     </li>
                     <li>
                         <ul class="list-group list-group-flush">
-                            <li class="list-group-item">Inbox</li>
+                            <li class="list-group-item">Inbox <span class="badge text-bg-primary rounded-pill">1</span></li>
                             <li class="list-group-item">Drafts</li>
                             <li class="list-group-item">Sent</li>
-                            <li class="list-group-item">Outbox</li>
+                            <li class="list-group-item">Outbox <span class="badge text-bg-primary rounded-pill">4</span></li>
                         </ul>
                     </li>
 
@@ -58,114 +59,119 @@
                     <tr style="height: 39dvh;">
                     <!-- <tr> -->
                         <td>
-                            <div class="container-sm table-wrapper">
-                                <table class="table table-sm table-hover">
-                                    <tr>
-                                        <th scope="col" style="width: 1%">⭐</th>
-                                        <th scope="col">From</th>
-                                        <th scope="col" style="width: 40%">Subject</th>
-                                        <th scope="col">Date</th>
-                                    </tr>
-                                    <tr>
-                                        <td>⭐</td>
-                                        <td>wolfbearclaw@nostr.messagepush.io</td>
-                                        <td><i>Running nVelope...</i></td>
-                                        <td id="thisDate"></td>
-                                    </tr>
-                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>
-                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>
-                                                                        <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>                                    <tr>
-                                        <td>📧</td>
-                                        <td>npub1f0rp5...pnpe4</td>
-                                        <td><i>Re: Latest info</i></td>
-                                        <td id="thisDate">2/28/2026, 3:18:14 AM</td>
-                                    </tr>
-                                </table>
+                            <div class="container-sm table-wrapper" id="emaildisplay">
+                                <!-- <table class="table table-sm table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col" style="width: 1%">⭐</th>
+                                            <th scope="col">From</th>
+                                            <th scope="col" style="width: 40%">Subject</th>
+                                            <th scope="col">Date</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+
+                                        <tr>
+                                            <td>⭐</td>
+                                            <td>wolfbearclaw@nostr.messagepush.io</td>
+                                            <td><i>Running nVelope...</i></td>
+                                            <td id="thisDate"></td>
+                                        </tr>
+                                        <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>
+                                        <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>
+                                                                            <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>                                    <tr>
+                                            <td>📧</td>
+                                            <td>npub1f0rp5...pnpe4</td>
+                                            <td><i>Re: Latest info</i></td>
+                                            <td id="thisDate">2/28/2026, 3:18:14 AM</td>
+                                        </tr>
+                                    </tbody>
+                                </table> -->
                             </div>
                         </td>
                     </tr>
@@ -183,9 +189,9 @@
         </div>
     </div>
     <script>
-        let dateCol = document.getElementById('thisDate');
-        let testDate = new Date();
-        dateCol.innerHTML = testDate.toLocaleString();
+        // let dateCol = document.getElementById('thisDate');
+        // let testDate = new Date();
+        // dateCol.innerHTML = testDate.toLocaleString();
 
         let getMailButton = new nVelopeButton('getMailBtn');
         let newMailButton = new nVelopeButton('newMailBtn');
@@ -213,6 +219,32 @@
         replyMailButton.show();
         forwardMailButton.show();
         deleteMailButton.show();
+
+        let emailtablelist = new EmailTableList('emaildisplay');
+        emailtablelist.renderTable();
+
+        emailtablelist.mapObjectToHeadings({
+            starred:'fav',
+            from:'from',
+            subject:'subject',
+            date:'date'
+        });
+        
+        let testEmail = {
+            fav:'✉',
+            from:'me',
+            subject:'running nostr!',
+            date: new Date().toLocaleString()
+        }
+        
+        emailtablelist.addElement(testEmail);
+        emailtablelist.addElement({
+            fav:'⭐',
+            from:'wolfbearclaw@nostr.messagepush.io',
+            subject:'!!!Important!!!',
+            date: '2/12/2026 3:06:00 AM'
+        }, 0);
+        
 
     </script>
 </body>
