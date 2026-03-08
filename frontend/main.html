@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="./styles/bootstrap.css">
+    <link rel="stylesheet" href="./styles/nvelopestyles.css">
     <script type="module" src="./script/md-block.js"></script>
     <script src="./script/button.js"></script>
     <script src="./script/emailtablelist.js"></script>
@@ -242,9 +243,30 @@
             fav:'⭐',
             from:'wolfbearclaw@nostr.messagepush.io',
             subject:'!!!Important!!!',
-            date: '2/12/2026 3:06:00 AM'
+            date: '2/12/2026 3:06:00 AM',
+            read:true
         }, 0);
+        emailtablelist.addElement(testEmail);
+        emailtablelist.addElement(testEmail);
+        emailtablelist.addElement(testEmail);
+        emailtablelist.addElement(testEmail);
+
+
+        // emailtablelist.selections = [0];
         
+        emailtablelist.renderTable();
+
+        emailtablelist.addSelectionListener("main", (selectionData) => {
+            console.log(selectionData);
+        });
+
+        emailtablelist.addRemoveListener("deleteEmails", (removalList) => {
+            emailtablelist.removeElements(removalList.selectionsIndex);
+        })
+
+        deleteMailButton.addClickedListener("deleteAction", () => {
+            emailtablelist.requestRemoveSelections();
+        });
 
     </script>
 </body>
