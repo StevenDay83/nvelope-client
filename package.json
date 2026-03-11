@@ -3,9 +3,14 @@
     "version": "1.0.0",
     "main": "main.js",
     "devDependencies": {
-        "electron": "^40.6.1"
+        "electron": "^40.6.1",
+        "electron-rebuild": "^3.2.9"
     },
     "scripts": {
-        "start": "electron ."
+        "start": "electron .",
+        "rebuild": "electron-rebuild -f -w better-sqlite3"
+    },
+    "dependencies": {
+        "better-sqlite3": "^12.6.2"
     }
 }

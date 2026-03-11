@@ -26,6 +26,12 @@ class CacheManager {
         }
     }
 
+    getCacheHandler(cacheHandlerId) {
+        if (cacheHandlerId && typeof(cacheHandlerId) === 'string'){
+            return this.cacheManagerTable[cacheHandlerId];
+        }
+    }
+
     setCacheExpiration(cacheHandlerId, expirationSeconds, intervalSeconds = 60000, cacheOnly = true){
         if (cacheHandlerId && typeof(cacheHandlerId) === 'string' && !isNaN(expirationSeconds) && 
         !isNaN(intervalSeconds)){

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="./styles/bootstrap.css">
+    <link rel="stylesheet" href="./styles/nvelopestyles.css">
+    <script src="./script/button.js"></script>
+    <script src="./script/emailtablelist.js"></script>
+    <script src="./script/svg.js"></script>
+    <script src="./script/emailviewtoolbar.js"></script>
+    <script src="./script/emailcontentinfopanel.js"></script>
+    <script src="./script/emailcontentrenderpane.js"></script>
+    <title>Compose Window</title>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- <table class="table">
+            <tr>
+                <td>
+                    <table class="table">
+                        <tr>
+                            <td>
+                                <button class='btn btn-primary' id="SendEmail">
+                                </button>
+                                <div class="vr"></div>
+                                <button class='btn btn-light' id="Send">Send</button>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <div class="row g-9 align-items-center">
+                        <div class="col-1">
+                            <label for="MailRecipients" class="col-form-label">To:</label>
+                        </div>
+                        <div class="col-9">
+                            <textarea name="MailRecipients" id="MailRecipients" rows="1" class="form-control"></textarea>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+            <tr class="input-group row g-9">
+                <td>
+                    <div class="col-9 input-group-text">
+                            <textarea name="ComposeText" id="ComposeTextArea" class="form-control"></textarea>
+                    </div>
+                </td>
+            </tr>
+        </table> -->
+        <div class="row align-items-start">
+            <div class="col">
+                <button class='btn btn-primary' id="SendEmail">
+                </button>
+                <div class="vr"></div>
+                <button class='btn btn-light' id="Send">Send</button>
+            </div>
+            <div class="row m-1">
+                <div class="col-sm">
+                        <label for="MailRecipients" class="col-form-label">To:</label>
+                </div>
+                <div class="col-xl">
+                    <textarea name="MailRecipients" id="MailRecipients" rows="1" class="form-control"></textarea>
+                </div>
+            </div>
+            <div class="row m-1">
+                <div class="col-xxl">
+                    <textarea name="ComposeText" id="ComposeTextArea" class="form-control" rows="20"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        let sendMailButton = new nVelopeButton('SendEmail');
+        sendMailButton.setButtonLabel(SEND_EMAIL_1 + ' Send');
+        sendMailButton.setStylePrimary();
+        sendMailButton.show();
+    </script>
+</body>
+</html>

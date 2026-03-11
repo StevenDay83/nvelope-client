@@ -9,6 +9,9 @@
     <script src="./script/button.js"></script>
     <script src="./script/emailtablelist.js"></script>
     <script src="./script/svg.js"></script>
+    <script src="./script/emailviewtoolbar.js"></script>
+    <script src="./script/emailcontentinfopanel.js"></script>
+    <script src="./script/emailcontentrenderpane.js"></script>
     <style>
         .table-wrapper {
             max-height: 39vh;
@@ -22,13 +25,13 @@
     <div class="container-fluid">
         <div class="row">
             <div class="col">
-            <button id="getMailBtn" hidden></button>
-            <div class="vr"></div>
-            <button id="newMailBtn" hidden></button>
-            <button id="replyMailBtn" hidden></button>
-            <button id="forwardMailBtn" hidden></button>
-            <button id="deleteMailBtn" hidden></button>
-        </div>
+                <button id="getMailBtn" hidden></button>
+                <div class="vr"></div>
+                <button id="newMailBtn" hidden></button>
+                <button id="replyMailBtn" hidden></button>
+                <button id="forwardMailBtn" hidden></button>
+                <button id="deleteMailBtn" hidden></button>
+            </div>
             <div class="col">
                 <div class="input-group mb-3">
                     <input type="text" class="form-control" placeholder="Search..." aria-label="Search"
@@ -179,10 +182,48 @@
                     <tr style="height: 50dvh;">
                     <!-- <tr> -->
                         <td>
-                            <md-block>
-                                ## Hi
-                                This is a *Preview* pane.
-                            </md-block>
+                            <table class="table table-borderless">
+                                <tr>
+                                    <td id = "emailcontentinfopanel">
+                                        <!-- <table class="table table-sm table-borderless table-light">
+                                            <tr>
+                                                <td>
+                                                    <h4>Subject Line</h4>
+                                                </td>
+                                                <td></td>
+                                            </tr>
+                                            <tr>
+                                                <td>
+                                                    <span class="small">From: Example@Example.com</span>
+                                                    
+                                                </td>
+                                                <td>
+                                                    <span class="small">Date:</span>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td>
+                                                    <span class="small">To: Example@Example.com</span>
+                                                </td>
+                                                <td></td>
+                                            </tr>
+                                        </table> -->
+                                    </td>
+                                </tr>
+                                <tr id='previewpaneview'>
+                                </tr>
+                                <tr>
+                                    <td id = "contentrender">
+                                        <!-- <table class="table">
+                                            <tr>
+                                                <td>
+                                                    Three
+                                                </td>
+                                            </tr>
+                                        </table> -->
+                                    </td>
+                                </tr>
+                            </table>
                         </td>
                     </tr>
                 </table>
@@ -267,6 +308,20 @@
         deleteMailButton.addClickedListener("deleteAction", () => {
             emailtablelist.requestRemoveSelections();
         });
+
+        let previewPaneToolbar = new EmailViewToolBar('previewpaneview');
+        let infoContentPanel = new EmailContentInfoPanel("emailcontentinfopanel");
+        infoContentPanel.setPanelInfo({
+            to:'Example@example.com',
+            from:'Example@example.com',
+            subjectLine:'Running Nostr!'
+        });
+        infoContentPanel.render();
+
+        let emailRenderPage = new EmailContentRenderPane("contentrender");
+        // emailRenderPage.setContentData('plain', "Running Nostr!!!\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nYo!");
+        emailRenderPage.setContentData('plain', "Running Nostr!!!\n\n\n\nYo!");
+        emailRenderPage.render();
 
     </script>
 </body>

@@ -1,5 +1,0 @@
-class EmailToolBar {
-    constructor(){
-        
-    }
-}

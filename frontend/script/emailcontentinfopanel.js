@@ -1,5 +1,7 @@
 class EmailContentInfoPanel {
-    constructor(){
+    constructor(id){
+        this.parentElement = document.getElementById(id);
+
         this.infoPanelTable = {
             to:[],
             from:'',
@@ -8,6 +10,9 @@ class EmailContentInfoPanel {
             timeStamp:-1
         };
         this.tableElement = document.createElement('table');
+        this.tableElement.className = 'table table-sm table-borderless table-light';
+
+        this.parentElement.appendChild(this.tableElement);
     }
 
     setPanelInfo(emailObject) {
@@ -33,6 +38,40 @@ class EmailContentInfoPanel {
     }
 
     render(){
+        this.tableElement.innerHTML = '';
+        this.renderSubjectLine();
+        this.renderFromLine();
+        this.renderToLine();
+    }
 
+    renderSubjectLine(){
+        let subjectLineRow = document.createElement('tr');
+        let subjectLineCol = document.createElement('td');
+
+        subjectLineRow.appendChild(subjectLineCol);
+        subjectLineCol.innerHTML = '<h4>' +  this.infoPanelTable.subjectLine + '</h4>';
+
+        this.tableElement.appendChild(subjectLineRow);
+    }
+
+    renderFromLine(){
+        let fromLineRow = document.createElement('tr');
+        let fromLineCol = document.createElement('td');
+
+        fromLineRow.appendChild(fromLineCol);
+        fromLineCol.innerHTML = '<span class="small">From: ' + this.infoPanelTable.from + '</span>';
+        // fromLineCol.innerHTML = '<h4>' +  this.infoPanelTable.subjectLine + '</h4>';
+
+        this.tableElement.appendChild(fromLineRow);
+    }
+
+    renderToLine(){
+        let toLineRow = document.createElement('tr');
+        let toLineCol = document.createElement('td');
+
+        toLineRow.appendChild(toLineCol);
+        toLineCol.innerHTML = '<span class="small">To: ' + this.infoPanelTable.to + '</span>';
+
+        this.tableElement.appendChild(toLineRow);
     }
 }
