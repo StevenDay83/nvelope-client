@@ -5,15 +5,21 @@ const path = require('path');
 const url = require('url');
 const { CacheManager } = require('./cache/cachemanager');
 const { EmailCacheHandler } = require('./email/emailcachehandler');
-
 const EmailDatabase = require('better-sqlite3');
+const fs = require('fs');
 
 // Initialize Caching
+let sqlPath = path.join(__dirname,'profiledata', 'emails.db');
 
-// let simpleEmailDatabase = new EmailDatabase(path.join(__dirname,'profiledata', 'emails.db'));
+if (fs.existsSync(sqlPath)){
+    fs.unlinkSync(sqlPath);
+}
 
-// let nvCacheManager = new CacheManager();
-// nvCacheManager.addCacheHandler("emaildbcache", new EmailCacheHandler(simpleEmailDatabase));
+let simpleEmailDatabase = new EmailDatabase(path.join(__dirname,'profiledata', 'emails.db'));
+
+let nvCacheManager = new CacheManager();
+nvCacheManager.addCacheHandler("emaildbcache", new EmailCacheHandler(simpleEmailDatabase));
+nvCacheManager.getCacheHandler("emaildbcache").initializeCacheSync();
 
 let splashScreen, mainWindow, composeWindow;
 
@@ -33,7 +39,7 @@ function startSplash() {
 
 function startMainWindow() {
     mainWindow = new BrowserWindow({
-        width: 1280,
+        width: 1324,
         height: 768,
         maxWidth: 1920,
         maxHeight: 1080
@@ -50,8 +56,8 @@ function startMainWindow() {
     });
 
     composeWindow = new BrowserWindow({
-        width: 800,
-        height: 750,
+        width: 1024,
+        height: 600,
         maxWidth: 1920,
         maxHeight: 1080
     });

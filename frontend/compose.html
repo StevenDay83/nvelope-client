@@ -14,7 +14,7 @@
     <title>Compose Window</title>
 </head>
 <body>
-    <div class="container-fluid">
+    <div class="container">
         <!-- <table class="table">
             <tr>
                 <td>
@@ -50,7 +50,7 @@
                 </td>
             </tr>
         </table> -->
-        <div class="row align-items-start">
+        <div class="row">
             <div class="col">
                 <button class='btn btn-primary' id="SendEmail">
                 </button>
@@ -58,16 +58,24 @@
                 <button class='btn btn-light' id="Send">Send</button>
             </div>
             <div class="row m-1">
-                <div class="col-sm">
-                        <label for="MailRecipients" class="col-form-label">To:</label>
+                <div class="col">
+                    <div class="input-group">
+                        <span class="input-group-text">To</span>
+                        <textarea name="MailRecipients" id="MailRecipients" rows="2" class="form-control"></textarea>
+                    </div>
                 </div>
-                <div class="col-xl">
-                    <textarea name="MailRecipients" id="MailRecipients" rows="1" class="form-control"></textarea>
+            </div>
+            <div class="row m-1">
+                <div class="col">
+                    <div class="input-group">
+                        <span class="input-group-text">Subject</span>
+                        <input class="form-control" type="text" name="" id="">
+                    </div>
                 </div>
             </div>
             <div class="row m-1">
                 <div class="col-xxl">
-                    <textarea name="ComposeText" id="ComposeTextArea" class="form-control" rows="20"></textarea>
+                    <textarea name="ComposeText" id="ComposeTextArea" class="form-control" rows="14"></textarea>
                 </div>
             </div>
         </div>
