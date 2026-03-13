@@ -3,12 +3,16 @@ const { Cache, NEW_VALUE, CHANGE_VALUE, DELETE_VALUE }= require('./cache.js');
 class CacheHandler {
     constructor(thisCache){
         this.cacheObject = thisCache ? thisCache : new Cache();
-        this.cacheObject.addAtomicChangeListener("this", this.triggerAtomicCacheAction);
         this.listenerCache = {
             add:{},
             change:{},
             delete:{}
         };
+        // this.cacheObject.addAtomicChangeListener("this", this.triggerAtomicCacheAction);
+        this.cacheObject.addAtomicChangeListener("this", (action, value) => {
+            // console.log(this.listenerCache);
+            this.triggerAtomicCacheAction(action,value);
+        });
     }
 
     initializeCacheSync(){
@@ -41,7 +45,35 @@ class CacheHandler {
         return this.cacheObject.getValue(key);
     }
 
-    getCacheValueByAttributes(searchAttributes) {}
+    getCacheValueByAttributes(searchAttributes) {
+        let cacheValueArray = [];
+
+        if (searchAttributes && typeof(searchAttributes) === 'object'){
+            let searchFields = Object.keys(searchAttributes);
+            let cacheTableKeys = Object.keys(this.cacheObject.cacheTable);
+
+            for (let i = 0; i < cacheTableKeys.length; i++){
+                let thisCacheObjectValue = cacheTableKeys[i].value;
+
+                if (thisthisCacheObjectValue) {
+                    let searchCount = 0;
+                    for (let j = 0; j < searchFields.length; j++){
+                        let thisSearchField = searchFields[i];
+
+                        if (thisCacheObjectValue[thisSearchField] == searchAttributes[thisSearchField]){
+                            searchCount++;
+                        }
+                    }
+
+                    if (searchCount == searchFields.length){
+                        cacheValueArray.push(cacheTableKeys[i]);
+                    }
+                }
+            }
+        }
+
+        return cacheValueArray;
+    }
 
     getCacheValuesOrderThan(timeValue) {
         let cacheArray = [];

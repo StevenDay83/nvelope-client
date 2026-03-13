@@ -41,13 +41,14 @@ class EmailCacheHandler extends CacheHandler {
 
         this.emailDatabase.exec(initializeTableCmd);
 
+        // ------
         const seedEmailStatement = this.emailDatabase.prepare(
             'INSERT INTO nvmessages_direct (email_id, email_content_json, email_reply_to, email_subject_line, email_mail_to_list_json, email_external_ref_list_json,\
              email_thread_id, email_timestamp_received, email_favorite, nostr_event_json, nostr_blinded_envelope_id, nostr_blinded_envelope_timestamp, nvelope_folder) \
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
         );
 
-        seedEmailStatement.run(
+        let resp = seedEmailStatement.run(
             "d776c82f412fa4359491456580024dbfe86ee251b7a1109cd7ff2a5ccac03ada",
             `"messageContent": {
             "plaintext": "Running nVelope!!!",
@@ -69,12 +70,50 @@ class EmailCacheHandler extends CacheHandler {
             'inbox'
         );
 
-        let testQuery = this.emailDatabase.prepare('SELECT * from nvmessages_direct ORDER BY email_timestamp_received').all();
+        console.log(resp);
 
-        console.log(testQuery);
+        // -----------------
+        let initialImportQuery = this.emailDatabase.prepare('SELECT * from nvmessages_direct ORDER BY email_timestamp_received').all();
+
+        console.log(initialImportQuery);
+
+        for (let i = 0; i < initialImportQuery.length; i++){
+            let emailRecord = initialImportQuery[i];
+
+            super.setCacheValue(emailRecord.email_id, emailRecord);
+        }
     }
 
+    setCacheValue(value){
+        if (key && typeof(key) === 'string' &&
+        value && typeof(value) === 'object'){
+            const setCacheValueStatement = this.emailDatabase.prepare(
+            'INSERT INTO nvmessages_direct (email_id, email_content_json, email_reply_to, email_subject_line, email_mail_to_list_json, email_external_ref_list_json,\
+             email_thread_id, email_timestamp_received, email_favorite, nostr_event_json, nostr_blinded_envelope_id, nostr_blinded_envelope_timestamp, nvelope_folder) \
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            );
 
+            const insertResp = setCacheValueStatement.run(
+                value.email_id,
+                value.email_content_json || '{}',
+                value.email_reply_to || '',
+                value.email_subject_line || '',
+                value.email_mail_to_list_json || '[]',
+                value.email_external_ref_list_json || '[]',
+                value.email_thread_id || '',
+                value.email_timestamp_received,
+                value.email_favorite || 'false',
+                value.nostr_event_json || '{}',
+                value.nostr_blinded_envelope_id || '',
+                value.nostr_blinded_envelope_timestamp != undefined ? value.nostr_blinded_envelope_timestamp : 0,
+                value.nvelope_folder || 'inbox'
+            );
+
+            if (insertResp && insertResp.changes == 1){
+                super.setCacheValue(insertResp.lastInsertRowid, value);
+            }
+        }
+    }
 }
 
 module.exports.EmailCacheHandler = EmailCacheHandler;

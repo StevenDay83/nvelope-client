@@ -7,7 +7,7 @@ class EmailTableList {
             {name:'messagetype', label:'📧', hidden:true},
             {name:'from', label:'From'},
             {name:'subject', label:'Subject', defaultwidth:'50'},
-            {name:'date', label:'Date', defaultwidth:'20'}
+            {name:'date', label:'Date', defaultwidth:'25'}
         ];
         this.objectMap = {};
         this.tableElement = document.createElement("table", "_emailtablelist");
