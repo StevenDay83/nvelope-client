@@ -5,6 +5,7 @@ const path = require('path');
 const url = require('url');
 const { CacheManager } = require('./cache/cachemanager');
 const { EmailCacheHandler } = require('./email/emailcachehandler');
+const { EmailStore } = require('./email/emailstore');
 const EmailDatabase = require('better-sqlite3');
 const fs = require('fs');
 
@@ -17,9 +18,12 @@ if (fs.existsSync(sqlPath)){
 
 let simpleEmailDatabase = new EmailDatabase(path.join(__dirname,'profiledata', 'emails.db'));
 
-let nvCacheManager = new CacheManager();
-nvCacheManager.addCacheHandler("emaildbcache", new EmailCacheHandler(simpleEmailDatabase));
-nvCacheManager.getCacheHandler("emaildbcache").initializeCacheSync();
+// let nvCacheManager = new CacheManager();
+// nvCacheManager.addCacheHandler("emaildbcache", new EmailCacheHandler(simpleEmailDatabase));
+// nvCacheManager.getCacheHandler("emaildbcache").initializeCacheSync();
+
+let nvProfileEmailStore = new EmailStore(simpleEmailDatabase);
+nvProfileEmailStore.initializeStore();
 
 let splashScreen, mainWindow, composeWindow;
 
