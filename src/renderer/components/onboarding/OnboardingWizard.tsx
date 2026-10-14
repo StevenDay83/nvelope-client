@@ -1,0 +1,1016 @@
+import { useState, useCallback, useEffect } from 'react'
+import { getPublicKey, generateSecretKey } from 'nostr-tools/pure'
+import { nsecEncode, npubEncode, decode } from 'nostr-tools/nip19'
+
+function formatNpub(pubkeyHex: string): string {
+  const npub = npubEncode(pubkeyHex)
+  if (npub.length <= 28) return npub
+  return npub.slice(0, 15) + '...' + npub.slice(-10)
+}
+
+// ------------------------------------------------------------------
+// Types
+// ------------------------------------------------------------------
+
+interface AccountData {
+  pubkey: string
+  nsec: string
+  certificatePrivateKeyPem: string
+  certificatePublicKeyDerBase64: string
+  displayName?: string
+  picture?: string
+  about?: string
+}
+
+interface WizardData {
+  identityName: string
+  passphrase: string
+  benchmarkHpm: number
+  accountType: 'new' | 'existing' | null
+  profile: { imageUrl: string; nickname: string; about: string }
+  nsec: string
+  pubkey: string
+  policies: { contactsMinutes: number; nonContactsMinutes: number }
+  cert: { keySize: 2048 | 4096; privateKeyPem: string; publicKeyDerBase64: string }
+  relays: string[]
+}
+
+interface Props {
+  onComplete: (identityId: string, name: string, accounts: AccountData[]) => void
+  onClose: () => void
+}
+
+type Screen =
+  | 'welcome'
+  | 'benchmark'
+  | 'identity'
+  | 'accountChoice'
+  | 'accountProfile'
+  | 'accountCreated'
+  | 'policies'
+  | 'certificate'
+  | 'network'
+  | 'review'
+
+const DEFAULT_RELAYS = [
+  'wss://relay.damus.io',
+  'wss://nostr.mom',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+]
+
+const STEP_LABELS = ['Benchmark', 'Identity', 'Accounts', 'Network', 'Review']
+
+function stepIndexForScreen(screen: Screen): number {
+  switch (screen) {
+    case 'welcome': return -1
+    case 'benchmark': return 0
+    case 'identity': return 1
+    case 'accountChoice':
+    case 'accountProfile':
+    case 'accountCreated':
+    case 'policies':
+    case 'certificate': return 2
+    case 'network': return 3
+    case 'review': return 4
+  }
+}
+
+// ------------------------------------------------------------------
+// Step Indicator
+// ------------------------------------------------------------------
+
+function StepIndicator({
+  currentStep,
+  onStepClick,
+}: {
+  currentStep: number
+  onStepClick?: (step: number) => void
+}) {
+  return (
+    <div className="flex items-center justify-center gap-1 text-sm mb-6">
+      {STEP_LABELS.map((label, i) => {
+        const clickable = onStepClick && i < currentStep
+        return (
+          <div key={label} className="flex items-center gap-1">
+            <span
+              onClick={clickable ? () => onStepClick!(i) : undefined}
+              className={
+                (i < currentStep
+                  ? 'text-green-400'
+                  : i === currentStep
+                    ? 'text-blue-400 font-semibold'
+                    : 'text-neutral-500') +
+                (clickable ? ' cursor-pointer underline decoration-dotted' : ' cursor-default')
+              }
+            >
+              {label}
+            </span>
+            {i < STEP_LABELS.length - 1 && (
+              <span className="text-neutral-600 mx-1">●</span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------
+// Navigation Buttons
+// ------------------------------------------------------------------
+
+function NavButtons({
+  onBack,
+  onNext,
+  nextLabel,
+  nextDisabled,
+}: {
+  onBack?: () => void
+  onNext: () => void
+  nextLabel?: string
+  nextDisabled?: boolean
+}) {
+  return (
+    <div className="flex gap-3">
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="flex-1 rounded border border-neutral-600 px-4 py-2 text-sm hover:bg-neutral-700"
+        >
+          Back
+        </button>
+      )}
+      <button
+        onClick={onNext}
+        disabled={nextDisabled}
+        className={`flex-1 rounded px-4 py-2 text-sm text-white disabled:opacity-50 ${
+          nextDisabled ? 'bg-neutral-600' : 'bg-blue-600 hover:bg-blue-500'
+        }`}
+      >
+        {nextLabel || 'Next'}
+      </button>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------
+// Wizard
+// ------------------------------------------------------------------
+
+export default function OnboardingWizard({ onComplete, onClose }: Props) {
+  const [screen, setScreen] = useState<Screen>('welcome')
+  const [data, setData] = useState<WizardData>({
+    identityName: '',
+    passphrase: '',
+    benchmarkHpm: 0,
+    accountType: null,
+    profile: { imageUrl: '', nickname: '', about: '' },
+    nsec: '',
+    pubkey: '',
+    policies: { contactsMinutes: 5, nonContactsMinutes: 30 },
+    cert: { keySize: 4096, privateKeyPem: '', publicKeyDerBase64: '' },
+    relays: [...DEFAULT_RELAYS],
+  })
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState('')
+  const [nsecSaved, setNsecSaved] = useState(false)
+  const [nsecWarned, setNsecWarned] = useState(false)
+  const [, setStoredBenchmarkLoaded] = useState(false)
+  const [keypairGenerated, setKeypairGenerated] = useState(false)
+
+  // Load benchmark from general client settings on mount
+  useEffect(() => {
+    window.nvelope.settings.get('benchmarkHashesPerMinute').then((value) => {
+      const hpm = typeof value === 'number' ? value : 0
+      if (hpm > 0) {
+        setData((d) => ({ ...d, benchmarkHpm: hpm }))
+      }
+      setStoredBenchmarkLoaded(true)
+    }).catch(() => setStoredBenchmarkLoaded(true))
+  }, [])
+
+  const update = useCallback(<K extends keyof WizardData>(key: K, value: WizardData[K]) => {
+    setData((d) => ({ ...d, [key]: value }))
+  }, [])
+
+  // ----------------------------------------------------------------
+  // Actions
+  // ----------------------------------------------------------------
+
+  const runBenchmark = async () => {
+    setWorking(true)
+    setError('')
+    try {
+      const result = await window.nvelope.benchmark.runPowBenchmark()
+      await window.nvelope.settings.set('benchmarkHashesPerMinute', result.hashesPerMinute)
+      update('benchmarkHpm', result.hashesPerMinute)
+    } catch (e) {
+      setError('Benchmark failed: ' + String(e))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const generateKeys = async () => {
+    if (keypairGenerated && data.pubkey && data.nsec) {
+      console.log('[wizard] Keypair already generated, skipping regeneration')
+      setScreen('accountCreated')
+      return
+    }
+    setWorking(true)
+    setError('')
+    try {
+      const sk = generateSecretKey()
+      const pubkey = getPublicKey(sk)
+      const nsec = nsecEncode(sk)
+
+      // Verify round-trip: nsec → decode → getPublicKey should match
+      const decoded = decode(nsec)
+      if (decoded.type !== 'nsec') throw new Error('nsecEncode produced invalid nsec')
+      const roundtripPubkey = getPublicKey(decoded.data as Uint8Array)
+      if (roundtripPubkey !== pubkey) {
+        throw new Error(`Key verification failed: encoded pubkey ${pubkey} !== roundtrip ${roundtripPubkey}`)
+      }
+
+      console.log('[wizard] Generated keypair:', {
+        pubkey,
+        npub: npubEncode(pubkey),
+        nsecPrefix: nsec.slice(0, 20) + '...',
+      })
+
+      update('pubkey', pubkey)
+      update('nsec', nsec)
+      setNsecSaved(false)
+      setNsecWarned(false)
+      setKeypairGenerated(true)
+      setScreen('accountCreated')
+    } catch (e) {
+      console.error('[wizard] Key generation failed:', e)
+      setError('Key generation failed: ' + String(e))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const generateCert = async () => {
+    setWorking(true)
+    setError('')
+    try {
+      const cert = await window.nvelope.cert.generate(data.cert.keySize)
+      update('cert', { ...data.cert, privateKeyPem: cert.privateKeyPem, publicKeyDerBase64: cert.publicKeyDerBase64 })
+    } catch (e) {
+      setError('Certificate generation failed: ' + String(e))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const importCert = async () => {
+    setError('')
+    try {
+      const result = await window.nvelope.file.openPemFile()
+      if (result.canceled) return
+      const derived = await window.nvelope.cert.derivePublic(result.content)
+      update('cert', { ...data.cert, privateKeyPem: result.content, publicKeyDerBase64: derived.publicKeyDerBase64 })
+    } catch (e) {
+      setError('Failed to import certificate: ' + String(e))
+    }
+  }
+
+  const saveNsec = async () => {
+    try {
+      const npub = data.pubkey ? npubEncode(data.pubkey) : ''
+      const result = await window.nvelope.file.saveTextFile(
+        'nvelope-nsec.txt',
+        `nVelope Account Backup\n======================\n\nPublic Key (npub):\n${npub}\n\nSecret Key (nsec — keep private):\n${data.nsec}\n\nKeep the nsec safe. Anyone with this key can send mail as you.`,
+      )
+      if (result.canceled) return
+      setNsecSaved(true)
+    } catch (e) {
+      setError('Failed to save file: ' + String(e))
+    }
+  }
+
+  const handleAccountCreatedNext = () => {
+    if (!nsecSaved && !nsecWarned) {
+      setNsecWarned(true)
+      const ok = confirm(
+        'WARNING: You have not saved your account secret key (nsec).\n\n' +
+          'If you lose this key, you will NOT be able to send messages or recover this account.\n\n' +
+          'Are you sure you want to continue without saving?'
+      )
+      if (!ok) return
+    }
+    setScreen('policies')
+  }
+
+  const finish = useCallback(async () => {
+    setWorking(true)
+    setError('')
+    try {
+      // Final keypair verification before creating the identity
+      if (data.nsec && data.pubkey) {
+        const decoded = decode(data.nsec)
+        if (decoded.type === 'nsec') {
+          const derived = getPublicKey(decoded.data as Uint8Array)
+          if (derived !== data.pubkey) {
+            throw new Error(
+              `Wizard keypair mismatch: data.pubkey=${data.pubkey} but nsec derives to ${derived}. ` +
+              `Do not proceed — keys were corrupted during wizard navigation.`
+            )
+          }
+        }
+      }
+
+      console.log('[wizard] finish() creating identity with account:', {
+        pubkey: data.pubkey,
+        npub: data.pubkey ? npubEncode(data.pubkey) : '',
+        nsecPrefix: data.nsec ? data.nsec.slice(0, 20) + '...' : '',
+      })
+
+      const account: AccountData = {
+        pubkey: data.pubkey,
+        nsec: data.nsec,
+        certificatePrivateKeyPem: data.cert.privateKeyPem,
+        certificatePublicKeyDerBase64: data.cert.publicKeyDerBase64,
+        displayName: data.profile.nickname || undefined,
+        picture: data.profile.imageUrl || undefined,
+        about: data.profile.about || undefined,
+      }
+
+      const identity = await window.nvelope.vault.createIdentity(data.identityName, data.passphrase)
+      console.log('[wizard] Created identity:', identity.id)
+      await window.nvelope.db.initSchema(identity.id)
+      await window.nvelope.vault.addAccount(identity.id, account)
+      console.log('[wizard] Account added to vault')
+      await window.nvelope.vault.updateSettings(identity.id, {
+        benchmarkHashesPerMinute: data.benchmarkHpm,
+        preferences: {
+          relays: data.relays,
+          policies: data.policies,
+        },
+      })
+
+      // Publish kind 30998 certificate + kind 0 profile to relays
+      try {
+        const pubResult = await window.nvelope.profile.publish(identity.id, data.pubkey)
+        console.log('[onboarding] Profile published:', pubResult)
+      } catch (publishErr) {
+        console.warn('[onboarding] Profile publish failed:', publishErr)
+        // Don't block onboarding if publish fails — user can retry later via Inbox
+      }
+
+      // Inject welcome message
+      const inbox = await window.nvelope.db.foldersGetSpecial(identity.id, data.pubkey, 'inbox')
+      const inboxId = (inbox as { id: number } | null)?.id ?? null
+      const welcomeId = 'welcome-' + Math.random().toString(36).slice(2) + Date.now().toString(36)
+      await window.nvelope.db.mailInsert(identity.id, {
+        innerEventId: welcomeId,
+        accountId: data.pubkey,
+        folderId: inboxId,
+        state: 'received',
+        senderPubkey: 'nvelope',
+        subject: 'Welcome to nVelope',
+        threadId: welcomeId,
+        isBroadcast: 0,
+        createdAt: Math.floor(Date.now() / 1000),
+        read: 0,
+        marked: 0,
+        messageData: JSON.stringify({
+          mailFrom: 'nvelope',
+          mailToList: [data.pubkey],
+          subjectLine: 'Welcome to nVelope',
+          messageType: 0,
+          formats: {
+            markdown: `Welcome to nVelope, ${data.profile.nickname || 'friend'}!\n\nThis is your first message. You can send and receive Nostr-Mail, manage broadcast subscriptions, and configure your recipient policy.\n\nHappy mailing!`,
+          },
+        }),
+      })
+
+      onComplete(identity.id, data.identityName, [account])
+    } catch (e) {
+      setError('Failed to finalize: ' + String(e))
+      setWorking(false)
+    }
+  }, [data, onComplete])
+
+  // ----------------------------------------------------------------
+  // Step indicator navigation: allow clicking completed steps
+  // ----------------------------------------------------------------
+
+  const handleStepClick = (step: number) => {
+    const current = stepIndexForScreen(screen)
+    if (step >= current) return
+    // Map step index back to the first screen of that step
+    switch (step) {
+      case 0: setScreen('benchmark'); break
+      case 1: setScreen('identity'); break
+      case 2: setScreen('accountChoice'); break
+      case 3: setScreen('network'); break
+      case 4: setScreen('review'); break
+    }
+  }
+
+  // ----------------------------------------------------------------
+  // Render helpers
+  // ----------------------------------------------------------------
+
+  const stepIndex = stepIndexForScreen(screen)
+
+  const renderWelcome = () => (
+    <div className="text-center space-y-5">
+      <div className="inline-block border border-neutral-600 px-4 py-1 text-sm text-neutral-400">
+        nVelope Client v0.1.0
+      </div>
+      <h1 className="text-2xl font-bold">Welcome to nVelope</h1>
+      <p className="text-neutral-400 leading-relaxed">
+        Self-sovereign email over the Internet.
+      </p>
+      <p className="text-sm text-neutral-400 leading-relaxed">
+        We will guide you through the set up of your nVelope client Identity and Account creation.
+        If you already have an Identity or Account to import, you will have the opportunity to do so later in the wizard.
+      </p>
+      <div className="flex gap-3 justify-center pt-2">
+        <button
+          onClick={onClose}
+          className="rounded border border-neutral-600 px-6 py-2 text-sm hover:bg-neutral-700"
+        >
+          Close
+        </button>
+        <button
+          onClick={() => {
+            if (data.benchmarkHpm > 0) {
+              setScreen('identity')
+            } else {
+              setScreen('benchmark')
+            }
+          }}
+          className="rounded bg-blue-600 px-6 py-2 text-sm text-white hover:bg-blue-500"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  )
+
+  const renderBenchmark = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold text-center">Proof-of-Work Benchmark</h2>
+      <p className="text-sm text-neutral-400 leading-relaxed text-center">
+        Before we begin setting up your Identity and Accounts, we need to quickly benchmark how fast your computer can process nVelope Mail.
+        nVelope uses &quot;Proof-of-Work&quot; to disincentivize the sending of spam and other junk email.
+      </p>
+      <p className="text-sm text-neutral-400 leading-relaxed text-center">
+        Other recipients on the network will also have their own processing safeguards as well. We will conduct a quick 10-second benchmark to help you decide on your processing policy and gauge how long it will take you to send to others.
+      </p>
+
+      {data.benchmarkHpm > 0 ? (
+        <div className="rounded bg-neutral-800 p-4 text-center space-y-2">
+          <p className="text-green-400 font-medium">Benchmark Complete</p>
+          <p className="text-sm text-neutral-400">
+            Your computer can process approximately{' '}
+            <span className="font-mono text-neutral-200">{data.benchmarkHpm.toLocaleString()}</span> hashes per minute.
+          </p>
+          <NavButtons onNext={() => setScreen('identity')} />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {working && (
+            <div className="py-2">
+              <div className="mb-2 h-2 w-full rounded bg-neutral-700 overflow-hidden">
+                <div className="h-full animate-pulse rounded bg-blue-500" style={{ width: '100%' }} />
+              </div>
+              <p className="text-center text-sm text-neutral-400">Running 10-second benchmark...</p>
+            </div>
+          )}
+          <div className="flex justify-center">
+            <button
+              onClick={runBenchmark}
+              disabled={working}
+              className="rounded bg-blue-600 px-6 py-2 text-white hover:bg-blue-500 disabled:opacity-50"
+            >
+              {working ? 'Benchmarking...' : 'Start Benchmark'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="text-center text-sm text-red-400">{error}</p>}
+    </div>
+  )
+
+  const renderIdentity = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <div className="space-y-3">
+        <p className="text-sm text-neutral-400 leading-relaxed">
+          Your nVelope client identity is your local collection of accounts. All your preferences, messages, and secure private data will be stored here. If you have an identity file to import, select <strong>Import</strong> instead.
+        </p>
+        <p className="text-sm text-neutral-400">Start by giving your identity a unique name.</p>
+        <p className="text-sm text-neutral-400">
+          You will also need to provide a secret passphrase that should not be shared with anyone and stored in a secure place.
+        </p>
+        <p className="text-sm text-yellow-500">
+          NOTE: If your passphrase is lost, you will not be able to access your identity.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1 block text-sm font-medium">Name *</label>
+          <input
+            value={data.identityName}
+            onChange={(e) => update('identityName', e.target.value)}
+            className="w-full rounded border border-neutral-600 bg-neutral-900 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium">Passphrase *</label>
+          <input
+            type="password"
+            value={data.passphrase}
+            onChange={(e) => update('passphrase', e.target.value)}
+            className="w-full rounded border border-neutral-600 bg-neutral-900 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      <NavButtons
+        onBack={() => setScreen('benchmark')}
+        onNext={() => {
+          if (!data.identityName.trim() || data.passphrase.length < 8) {
+            setError('Name and passphrase (8+ chars) are required')
+            return
+          }
+          setError('')
+          setScreen('accountChoice')
+        }}
+      />
+    </div>
+  )
+
+  const renderAccountChoice = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">Account Setup</h2>
+      <p className="text-sm text-neutral-400 leading-relaxed">
+        Now that we have an Identity in nVelope, let&apos;s add your first account.
+      </p>
+      <p className="text-sm text-neutral-400 leading-relaxed">
+        If you have an existing account selected we will pull your profile data and get it set up for sending and receiving nVelope.
+      </p>
+      <p className="text-sm text-neutral-400 leading-relaxed">
+        If this is an entirely new account you are creating, we&apos;ll walk you through the steps of creating your profile and nVelope policies.
+      </p>
+
+      <div className="space-y-2">
+        <label className="flex items-center gap-3 rounded border border-neutral-700 bg-neutral-800 p-3 cursor-pointer hover:bg-neutral-750">
+          <input
+            type="radio"
+            name="accountType"
+            checked={data.accountType === 'existing'}
+            onChange={() => update('accountType', 'existing')}
+            className="h-4 w-4"
+          />
+          <span className="text-sm">I have an existing account</span>
+        </label>
+        <label className="flex items-center gap-3 rounded border border-neutral-700 bg-neutral-800 p-3 cursor-pointer hover:bg-neutral-750">
+          <input
+            type="radio"
+            name="accountType"
+            checked={data.accountType === 'new'}
+            onChange={() => update('accountType', 'new')}
+            className="h-4 w-4"
+          />
+          <span className="text-sm">I am creating an entirely new account</span>
+        </label>
+      </div>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      <NavButtons
+        onBack={() => setScreen('identity')}
+        onNext={() => {
+          if (!data.accountType) {
+            setError('Please select an option')
+            return
+          }
+          setError('')
+          if (data.accountType === 'existing') {
+            setError('Importing existing accounts is not yet implemented')
+          } else {
+            setScreen('accountProfile')
+          }
+        }}
+      />
+    </div>
+  )
+
+  const renderAccountProfile = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">New Account Creation: Profile</h2>
+      <p className="text-sm text-neutral-400">Let&apos;s get started with your Profile information.</p>
+      <p className="text-xs text-neutral-500">Note: Images must be hosted from another location and cannot be uploaded.</p>
+
+      <div className="flex gap-4 items-start">
+        <div className="flex flex-col items-center gap-2">
+          <div className="h-20 w-20 rounded-full bg-purple-600 flex items-center justify-center text-xs text-white overflow-hidden text-center leading-tight">
+            {data.profile.imageUrl ? (
+              <img src={data.profile.imageUrl} alt="avatar" className="h-full w-full object-cover" />
+            ) : (
+              <>Image<br />here</>
+            )}
+          </div>
+        </div>
+        <div className="flex-1 space-y-3">
+          <div>
+            <label className="mb-1 block text-sm font-medium">Image URL</label>
+            <input
+              placeholder="https://..."
+              value={data.profile.imageUrl}
+              onChange={(e) => update('profile', { ...data.profile, imageUrl: e.target.value })}
+              className="w-full rounded border border-neutral-600 bg-neutral-900 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">Your nickname *</label>
+            <input
+              value={data.profile.nickname}
+              onChange={(e) => update('profile', { ...data.profile, nickname: e.target.value })}
+              className="w-full rounded border border-neutral-600 bg-neutral-900 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">Something about you</label>
+            <textarea
+              value={data.profile.about}
+              onChange={(e) => update('profile', { ...data.profile, about: e.target.value })}
+              className="w-full rounded border border-neutral-600 bg-neutral-900 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              rows={3}
+            />
+          </div>
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      <NavButtons
+        onBack={() => setScreen('accountChoice')}
+        onNext={() => {
+          if (!data.profile.nickname.trim()) {
+            setError('Nickname is required')
+            return
+          }
+          setError('')
+          generateKeys()
+        }}
+        nextLabel={working ? 'Creating...' : 'Create Account'}
+        nextDisabled={working}
+      />
+    </div>
+  )
+
+  const renderAccountCreated = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">New Account Creation: Profile</h2>
+      <p className="text-sm text-neutral-300">
+        Your new Account{' '}
+        <span
+          className="font-mono text-blue-400"
+          title={data.pubkey ? npubEncode(data.pubkey) : ''}
+        >
+          {data.pubkey ? formatNpub(data.pubkey) : ''}
+        </span>{' '}
+        has been created!
+      </p>
+      <p className="text-sm text-yellow-500">
+        Please download your Account secret key and store it somewhere safe. If lost, you may not be able to access your Account or send messages.
+      </p>
+
+      <div className="flex gap-4 items-start">
+        <div className="h-20 w-20 rounded-full bg-purple-600 flex items-center justify-center text-xs text-white overflow-hidden flex-shrink-0 text-center leading-tight">
+          {data.profile.imageUrl ? (
+            <img src={data.profile.imageUrl} alt="avatar" className="h-full w-full object-cover" />
+          ) : (
+            <>Image<br />here</>
+          )}
+        </div>
+        <div className="space-y-1 text-sm">
+          <p>
+            <span className="text-neutral-400">Nickname:</span>{' '}
+            <span className="text-neutral-200">{data.profile.nickname}</span>
+          </p>
+          {data.profile.about && (
+            <p>
+              <span className="text-neutral-400">About:</span>{' '}
+              <span className="text-neutral-200">{data.profile.about}</span>
+            </p>
+          )}
+        </div>
+      </div>
+
+      <button
+        onClick={saveNsec}
+        className="rounded bg-blue-600 px-6 py-2 text-sm text-white hover:bg-blue-500"
+      >
+        Save account secret key...
+      </button>
+      {nsecSaved && <p className="text-xs text-green-400">Secret key saved.</p>}
+
+      <p className="text-sm text-neutral-400">
+        Once you have saved your secret key, let&apos;s move on to setting up your nVelope policies.
+      </p>
+
+      <NavButtons
+        onBack={() => setScreen('accountProfile')}
+        onNext={handleAccountCreatedNext}
+      />
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+    </div>
+  )
+
+  const renderPolicies = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">nVelope Policies</h2>
+      <p className="text-sm text-neutral-400">
+        We will create a simple and optimized recipient policy for you to start. You will be able to customize it after we are all set up.
+      </p>
+
+      <div className="space-y-5">
+        <div>
+          <div className="flex justify-between text-sm mb-2">
+            <span>Contacts (People I know)</span>
+            <span className="text-neutral-400">{data.policies.contactsMinutes} Minutes</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={60}
+            value={data.policies.contactsMinutes}
+            onChange={(e) =>
+              update('policies', { ...data.policies, contactsMinutes: parseInt(e.target.value) })
+            }
+            className="w-full accent-blue-500"
+          />
+          <div className="flex justify-between text-xs text-neutral-500 mt-1">
+            <span>0 Minutes</span>
+            <span>60 Minutes</span>
+          </div>
+        </div>
+
+        <div>
+          <div className="flex justify-between text-sm mb-2">
+            <span>Non-Contacts (People I may not know)</span>
+            <span className="text-neutral-400">{data.policies.nonContactsMinutes} Minutes</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={60}
+            value={data.policies.nonContactsMinutes}
+            onChange={(e) =>
+              update('policies', { ...data.policies, nonContactsMinutes: parseInt(e.target.value) })
+            }
+            className="w-full accent-blue-500"
+          />
+          <div className="flex justify-between text-xs text-neutral-500 mt-1">
+            <span>0 Minutes</span>
+            <span>60 Minutes</span>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-sm text-neutral-400">
+        Once you set your recipient policy, let&apos;s go ahead and create your certificate.
+      </p>
+
+      <NavButtons
+        onBack={() => setScreen('accountCreated')}
+        onNext={() => setScreen('certificate')}
+      />
+    </div>
+  )
+
+  const renderCertificate = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">Account Certificate</h2>
+      <p className="text-sm text-neutral-400 leading-relaxed">
+        You will need a nvelope certificate to allow others to send you mail. If you have a private key certificate generated elsewhere you want to import, you can do so now. Otherwise we can generate one for you.
+      </p>
+      <p className="text-sm text-yellow-500">
+        Note: Your private key certificate MUST be kept safe at all times. nVelope will lock it in its vault and you should make a backup. If your private key certificate is lost you will no longer be able to read any new mail.
+      </p>
+      <p className="text-sm text-neutral-400">
+        The larger the key length the more secure. Please note this will also be slower to process on some machines. We recommend 4096-bit.
+      </p>
+
+      <div className="space-y-2">
+        {[2048, 4096].map((size) => (
+          <label
+            key={size}
+            className="flex items-center gap-3 rounded border border-neutral-700 bg-neutral-800 p-3 cursor-pointer hover:bg-neutral-750"
+          >
+            <input
+              type="radio"
+              name="certSize"
+              checked={data.cert.keySize === size}
+              onChange={() => update('cert', { ...data.cert, keySize: size as 2048 | 4096 })}
+              className="h-4 w-4"
+            />
+            <span className="text-sm">
+              {size}-bit
+              {size === 4096 && ' (Recommended)'}
+              {size === 2048 && ' (Quicker, less secure)'}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {data.cert.privateKeyPem && (
+        <div className="rounded bg-green-900/20 border border-green-800 p-3 text-sm">
+          <p className="text-green-400">Certificate generated successfully!</p>
+        </div>
+      )}
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      <div className="flex gap-3">
+        <button
+          onClick={generateCert}
+          disabled={working}
+          className="flex-1 rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500 disabled:opacity-50"
+        >
+          {working ? 'Generating...' : 'Generate Certificate'}
+        </button>
+        <button
+          onClick={importCert}
+          className="flex-1 rounded border border-neutral-600 px-4 py-2 text-sm hover:bg-neutral-700"
+        >
+          Import Key...
+        </button>
+      </div>
+
+      <NavButtons
+        onBack={() => setScreen('policies')}
+        onNext={() => {
+          if (!data.cert.privateKeyPem) {
+            setError('Please generate or import a certificate first')
+            return
+          }
+          setError('')
+          setScreen('network')
+        }}
+        nextDisabled={!data.cert.privateKeyPem}
+      />
+    </div>
+  )
+
+  const renderNetwork = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">Network</h2>
+      <p className="text-sm text-neutral-400 leading-relaxed">
+        nVelope operates over what is known as Nostr or &quot;The Nostr Network&quot;. It is a series of independently owned servers used for everything from sending nVelope Mail to Social media.
+      </p>
+      <p className="text-sm text-neutral-400">
+        To help get you started we provided you with some defaults that should be fine to use. If you are familiar with Nostr or have other relay servers you want to add you can adjust here.
+      </p>
+
+      <div className="rounded border border-neutral-700 bg-neutral-800 p-3">
+        <div className="space-y-1 max-h-40 overflow-y-auto">
+          {data.relays.map((relay, i) => (
+            <div key={i} className="flex items-center justify-between text-sm py-1">
+              <span className="font-mono text-blue-400">{relay}</span>
+              <button
+                onClick={() => update('relays', data.relays.filter((_, idx) => idx !== i))}
+                className="text-xs text-red-400 hover:text-red-300"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => {
+            const url = prompt('Enter relay URL (wss://...)')
+            if (url && url.startsWith('wss://')) {
+              update('relays', [...data.relays, url])
+            } else if (url) {
+              setError('Relay URL must start with wss://')
+            }
+          }}
+          className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-500"
+        >
+          Add
+        </button>
+        <button
+          onClick={() => update('relays', [...DEFAULT_RELAYS])}
+          className="rounded border border-neutral-600 px-4 py-2 text-sm hover:bg-neutral-700"
+        >
+          Reset to Defaults
+        </button>
+      </div>
+
+      <p className="text-sm text-neutral-400">Click next to review all your information.</p>
+
+      <NavButtons
+        onBack={() => setScreen('certificate')}
+        onNext={() => setScreen('review')}
+      />
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+    </div>
+  )
+
+  const renderReview = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">Review</h2>
+      <p className="text-sm text-neutral-400">
+        Please review all information about your Identity, Accounts, and Network. If anything needs to be adjusted go back to the associated section.
+      </p>
+
+      <div className="rounded border border-neutral-700 bg-neutral-800 p-4 space-y-3 text-sm">
+        <div>
+          <span className="text-neutral-400">Identity Name:</span>{' '}
+          <span className="text-neutral-200">{data.identityName}</span>
+        </div>
+        <div>
+          <span className="text-neutral-400">Account:</span>{' '}
+          <span
+            className="font-mono text-neutral-200"
+            title={data.pubkey ? npubEncode(data.pubkey) : ''}
+          >
+            {data.pubkey ? formatNpub(data.pubkey) : ''}
+          </span>
+        </div>
+        <div>
+          <span className="text-neutral-400">Nickname:</span>{' '}
+          <span className="text-neutral-200">{data.profile.nickname}</span>
+        </div>
+        <div>
+          <span className="text-neutral-400">Certificate:</span>{' '}
+          <span className="text-neutral-200">{data.cert.keySize}-bit</span>
+        </div>
+        <div>
+          <span className="text-neutral-400">Contact Policy:</span>{' '}
+          <span className="text-neutral-200">{data.policies.contactsMinutes} min</span>
+        </div>
+        <div>
+          <span className="text-neutral-400">Non-Contact Policy:</span>{' '}
+          <span className="text-neutral-200">{data.policies.nonContactsMinutes} min</span>
+        </div>
+        <div>
+          <span className="text-neutral-400">Relays:</span>{' '}
+          <span className="text-neutral-200">{data.relays.length} configured</span>
+        </div>
+        <div>
+          <span className="text-neutral-400">Benchmark:</span>{' '}
+          <span className="text-neutral-200">{data.benchmarkHpm.toLocaleString()} hashes/min</span>
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      <NavButtons
+        onBack={() => setScreen('network')}
+        onNext={finish}
+        nextLabel={working ? 'Saving...' : 'Save and Publish'}
+        nextDisabled={working}
+      />
+    </div>
+  )
+
+  // ----------------------------------------------------------------
+  // Main render
+  // ----------------------------------------------------------------
+
+  return (
+    <div className="flex h-screen items-center justify-center bg-neutral-900 px-4">
+      <div className="w-full max-w-lg rounded-lg border border-neutral-700 bg-neutral-800 p-6 shadow-xl">
+        {screen === 'welcome' && renderWelcome()}
+        {screen === 'benchmark' && renderBenchmark()}
+        {screen === 'identity' && renderIdentity()}
+        {screen === 'accountChoice' && renderAccountChoice()}
+        {screen === 'accountProfile' && renderAccountProfile()}
+        {screen === 'accountCreated' && renderAccountCreated()}
+        {screen === 'policies' && renderPolicies()}
+        {screen === 'certificate' && renderCertificate()}
+        {screen === 'network' && renderNetwork()}
+        {screen === 'review' && renderReview()}
+      </div>
+    </div>
+  )
+}

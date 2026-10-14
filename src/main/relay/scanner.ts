@@ -1,0 +1,321 @@
+import { Notification } from 'electron'
+import { decode } from 'nostr-tools/nip19'
+import { SimplePool } from 'nostr-tools'
+import {
+  NvelopeClient,
+  NostrToolsTransport,
+  NsecSigner,
+  type ScannedDirectMail,
+  type ScannedBroadcast,
+} from 'nvelope-core'
+import type { VaultPayload } from '../ipc/vaultHandlers'
+import { getDb } from '../ipc/dbHandlers'
+import { CachingTransport } from './cachingTransport'
+import * as dao from '../db/dao'
+
+interface ScanState {
+  intervalId: ReturnType<typeof setInterval>
+  scanning: boolean
+}
+
+const scanStates = new Map<string, ScanState>()
+const AUTO_SCAN_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+
+function decodeNsec(nsec: string): Uint8Array {
+  const result = decode(nsec)
+  if (result.type !== 'nsec') throw new Error('Invalid nsec format')
+  return result.data as Uint8Array
+}
+
+function getRelaysFromSettings(settings: VaultPayload['settings']): string[] {
+  const prefs = (settings.preferences ?? {}) as Record<string, unknown>
+  const relays = prefs.relays
+  if (Array.isArray(relays) && relays.length > 0) return relays as string[]
+  return [
+    'wss://relay.damus.io',
+    'wss://nostr.mom',
+    'wss://nos.lol',
+    'wss://relay.primal.net',
+  ]
+}
+
+function getSinceForAccount(settings: VaultPayload['settings'], pubkey: string): number | undefined {
+  const lastRetrieved = settings.lastRetrievedPerAccount?.[pubkey]
+  if (lastRetrieved) return lastRetrieved
+  // Default: 7 days ago to avoid fetching too much history on first scan
+  return Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+}
+
+async function storeDirectMail(
+  identityId: string,
+  accountId: string,
+  mail: ScannedDirectMail,
+): Promise<void> {
+  console.log(`[scanner] storeDirectMail START innerEventId=${mail.innerEventId.slice(0, 16)}...`)
+  const db = getDb(identityId)
+  const inbox = dao.getSpecialFolder(db, accountId, 'inbox')
+  const inboxId = inbox?.id ?? null
+  console.log(`[scanner] storeDirectMail: inbox folder=${inbox?.name ?? 'NOT FOUND'} id=${inboxId}`)
+
+  const msg = mail.message
+  const subject = msg.getSubject()
+  const externalReferences = msg.getExternalReferences()
+  const formats = msg.getContentFormats()
+  const bodyText = msg.getMarkdown() || msg.getPlaintext() || msg.getHtml() || ''
+  console.log(`[scanner] storeDirectMail: bodyText length=${bodyText.length} formats=${JSON.stringify(formats)}`)
+  const messageData = JSON.stringify({
+    mailFrom: msg.getFrom(),
+    mailToList: msg.getRecipientsTo(),
+    subjectLine: subject,
+    messageType: msg.contentModel.toWire(),
+    formats,
+    bodyText,
+    externalReferences,
+    hasAttachments: externalReferences.length > 0,
+  })
+  console.log(`[scanner] storeDirectMail: messageData length=${messageData.length}`)
+
+  try {
+    dao.insertMail(db, {
+      innerEventId: mail.innerEventId,
+      accountId,
+      folderId: inboxId,
+      state: 'received',
+      senderPubkey: mail.senderPubkey,
+      subject: subject || null,
+      threadId: msg.getThreadId() || mail.innerEventId,
+      isBroadcast: 0,
+      createdAt: mail.innerCreatedAt,
+      read: 0,
+      marked: 0,
+      envelopeEventId: mail.event.id,
+      messageData,
+    })
+    console.log(`[scanner] storeDirectMail: SUCCESS innerEventId=${mail.innerEventId.slice(0, 16)}...`)
+  } catch (e) {
+    console.error(`[scanner] storeDirectMail: FAILED innerEventId=${mail.innerEventId.slice(0, 16)}... error=${String(e)}`)
+    throw e
+  }
+}
+
+async function storeBroadcastMail(
+  identityId: string,
+  accountId: string,
+  scanned: ScannedBroadcast,
+): Promise<void> {
+  const db = getDb(identityId)
+  const inbox = dao.getSpecialFolder(db, accountId, 'inbox')
+  const inboxId = inbox?.id ?? null
+
+  const msg = scanned.message
+  const formats = msg.getContentFormats()
+  const externalReferences = msg.getExternalReferences()
+  const bodyText = msg.contentModel.get('md') || msg.contentModel.get('plaintext') || msg.contentModel.get('html') || ''
+  const messageData = JSON.stringify({
+    mailFrom: msg.getAuthor(),
+    mailToList: [],
+    subjectLine: msg.getSubject(),
+    messageType: msg.contentModel.toWire(),
+    formats,
+    bodyText,
+    externalReferences,
+    hasAttachments: externalReferences.length > 0,
+  })
+
+  dao.insertMail(db, {
+    innerEventId: scanned.event.id,
+    accountId,
+    folderId: inboxId,
+    state: 'received',
+    senderPubkey: msg.getAuthor(),
+    subject: msg.getSubject() || null,
+    threadId: scanned.event.id,
+    isBroadcast: 1,
+    createdAt: scanned.event.created_at,
+    read: 0,
+    marked: 0,
+    envelopeEventId: scanned.event.id,
+    messageData,
+  })
+}
+
+async function scanIdentity(
+  identityId: string,
+  payload: VaultPayload,
+  mainWindow: Electron.BrowserWindow | null,
+): Promise<{ direct: number; broadcast: number; errors: string[] }> {
+  const errors: string[] = []
+  let directCount = 0
+  let broadcastCount = 0
+
+  const relays = getRelaysFromSettings(payload.settings)
+  const transport = new CachingTransport(
+    new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 8000 }),
+    getDb(identityId),
+  )
+
+  for (const account of payload.accounts) {
+    try {
+      const secretKey = decodeNsec(account.nsec)
+      const signer = new NsecSigner(secretKey)
+      const client = new NvelopeClient({
+        transport,
+        signer,
+        relays,
+        certificatePrivateKeyPem: account.certificatePrivateKeyPem,
+        certificatePublicKeyDerBase64: account.certificatePublicKeyDerBase64,
+      })
+
+      const since = getSinceForAccount(payload.settings, account.pubkey)
+      console.log(`[scanner] Scanning direct inbox for ${account.pubkey.slice(0, 16)}... since=${since} (${new Date((since ?? 0) * 1000).toISOString()})`)
+
+      // Debug: query ALL direct envelopes without since to verify visibility
+      try {
+        const allEvents = await transport.query(
+          { kinds: [8500 as number], '#l': ['direct_message'] },
+          relays,
+        )
+        console.log(`[scanner] Raw query (no since): ${allEvents.length} kind-8500 direct_message events found`)
+        if (allEvents.length > 0) {
+          const newest = allEvents.reduce((a, b) => b.created_at > a.created_at ? b : a, allEvents[0]!)
+          console.log(`[scanner] Newest envelope created_at=${newest.created_at}, id=${newest.id.slice(0, 16)}...`)
+        }
+      } catch (e) {
+        console.error('[scanner] Raw query error:', e)
+      }
+
+      // Direct mail
+      const directResult = await client.checkDirectInbox({ since })
+      console.log(`[scanner] Direct scan result: ${directResult.inbox.length} inbox, ${directResult.rejected.length} rejected`)
+      for (const rej of directResult.rejected) {
+        console.log(`[scanner]   Rejected: sender=${rej.senderPubkey.slice(0, 16)}... reason=${rej.reason}${rej.requiredTarget ? ' target=' + rej.requiredTarget : ''}`)
+      }
+      for (let i = 0; i < directResult.inbox.length; i++) {
+        const mail = directResult.inbox[i]!
+        const msg = mail.message
+        console.log(`[scanner] Decrypted mail ${i + 1}/${directResult.inbox.length}: innerEventId=${mail.innerEventId.slice(0, 16)}...`)
+        console.log(`[scanner]   subject=${msg.getSubject()} formats=${JSON.stringify(msg.getContentFormats())}`)
+        console.log(`[scanner]   contentWire=${JSON.stringify(msg.contentModel.toWire())}`)
+        try {
+          await storeDirectMail(identityId, account.pubkey, mail)
+          directCount++
+          console.log(`[scanner] Stored mail ${i + 1} OK, directCount=${directCount}`)
+        } catch (e) {
+          console.error(`[scanner] Storing mail ${i + 1} FAILED:`, e)
+        }
+      }
+
+      // Verify rows are in DB
+      const db = getDb(identityId)
+      const count = db.prepare('SELECT COUNT(*) as c FROM mail WHERE accountId = ?').get(account.pubkey) as { c: number }
+      console.log(`[scanner] DB verify: ${count.c} total mail rows for account ${account.pubkey.slice(0, 16)}...`)
+
+      // Broadcast mail
+      const subs = dao.getSubscriptions(db, account.pubkey)
+      for (const sub of subs) {
+        try {
+          client.addBroadcastCredential(sub.naddr)
+        } catch (e) {
+          errors.push(`Invalid broadcast credential: ${String(e)}`)
+        }
+      }
+
+      const broadcastResult = await client.checkBroadcastInbox({ since })
+      for (const mail of broadcastResult) {
+        await storeBroadcastMail(identityId, account.pubkey, mail)
+        broadcastCount++
+      }
+
+      // Update lastRetrieved
+      const now = Math.floor(Date.now() / 1000)
+      payload.settings.lastRetrievedPerAccount = {
+        ...(payload.settings.lastRetrievedPerAccount ?? {}),
+        [account.pubkey]: now,
+      }
+    } catch (e) {
+      errors.push(`Account ${account.pubkey.slice(0, 16)}...: ${String(e)}`)
+    }
+  }
+
+  transport.close()
+
+  const totalNew = directCount + broadcastCount
+  if (totalNew > 0 && mainWindow) {
+    // Send to renderer
+    mainWindow.webContents.send('mail:new', {
+      identityId,
+      directCount,
+      broadcastCount,
+    })
+
+    // OS notification
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'nVelope',
+        body: `You have ${totalNew} new message${totalNew > 1 ? 's' : ''}`,
+      }).show()
+    }
+  }
+
+  return { direct: directCount, broadcast: broadcastCount, errors }
+}
+
+export async function manualScan(
+  identityId: string,
+  mainWindow: Electron.BrowserWindow | null,
+): Promise<{ direct: number; broadcast: number; errors: string[] }> {
+  const { getUnlockedSession } = await import('../ipc/vaultHandlers')
+  const session = getUnlockedSession(identityId)
+  if (!session) {
+    throw new Error('Identity is locked')
+  }
+  return scanIdentity(identityId, session.payload, mainWindow)
+}
+
+export function startAutoScan(
+  identityId: string,
+  mainWindow: Electron.BrowserWindow | null,
+): void {
+  if (scanStates.has(identityId)) return // already running
+
+  const intervalId = setInterval(async () => {
+    const { getUnlockedSession } = await import('../ipc/vaultHandlers')
+    const session = getUnlockedSession(identityId)
+    if (!session) {
+      stopAutoScan(identityId)
+      return
+    }
+    try {
+      await scanIdentity(identityId, session.payload, mainWindow)
+    } catch (e) {
+      console.error(`[scanner] auto-scan error for ${identityId}:`, e)
+    }
+  }, AUTO_SCAN_INTERVAL_MS)
+
+  scanStates.set(identityId, { intervalId, scanning: false })
+  console.log(`[scanner] auto-scan started for ${identityId}`)
+}
+
+export function stopAutoScan(identityId: string): void {
+  const state = scanStates.get(identityId)
+  if (state) {
+    clearInterval(state.intervalId)
+    scanStates.delete(identityId)
+    console.log(`[scanner] auto-scan stopped for ${identityId}`)
+  }
+}
+
+export function stopAllScans(): void {
+  for (const [identityId, state] of scanStates) {
+    clearInterval(state.intervalId)
+    console.log(`[scanner] auto-scan stopped for ${identityId}`)
+  }
+  scanStates.clear()
+}
+
+export function getScanStatus(): Array<{ identityId: string; active: boolean }> {
+  return Array.from(scanStates.entries()).map(([identityId]) => ({
+    identityId,
+    active: true,
+  }))
+}

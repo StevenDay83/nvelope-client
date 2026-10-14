@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nVelope</title>
+    <style>
+      #root:empty::before {
+        content: 'Loading nVelope...';
+        display: block;
+        padding: 40px;
+        text-align: center;
+        font-family: system-ui, sans-serif;
+        color: #888;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="fatal-error" style="display:none; padding:20px; color:#f87171;"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        var el = document.getElementById('fatal-error')
+        if (el) {
+          el.style.display = 'block'
+          el.innerHTML = '<h2>Runtime Error</h2><pre style="white-space:pre-wrap">' + e.message + '\n' + (e.error && e.error.stack ? e.error.stack : '') + '</pre>'
+        }
+        console.error('[renderer] Uncaught error:', e.error || e.message)
+      })
+      window.addEventListener('unhandledrejection', function(e) {
+        var el = document.getElementById('fatal-error')
+        if (el) {
+          el.style.display = 'block'
+          el.innerHTML = '<h2>Unhandled Promise Rejection</h2><pre style="white-space:pre-wrap">' + e.reason + '</pre>'
+        }
+        console.error('[renderer] Unhandled rejection:', e.reason)
+      })
+    </script>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
