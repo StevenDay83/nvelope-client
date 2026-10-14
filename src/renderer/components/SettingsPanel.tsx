@@ -61,6 +61,33 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
   // Backup section
   const [backupStatus, setBackupStatus] = useState('')
 
+  // Mail profile publishing (per account)
+  const [publishingAccount, setPublishingAccount] = useState<string | null>(null)
+  const [publishStatus, setPublishStatus] = useState<Record<string, string>>({})
+
+  const handlePublishProfile = async (account: AccountData) => {
+    setPublishingAccount(account.pubkey)
+    try {
+      const result = await window.nvelope.profile.publish(identityId, account.pubkey)
+      setPublishStatus((prev) => ({
+        ...prev,
+        [account.pubkey]: result.certificateEventId
+          ? 'Published'
+          : 'Publish failed — check console',
+      }))
+    } catch (e) {
+      const msg = String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, '')
+      setPublishStatus((prev) => ({ ...prev, [account.pubkey]: 'Failed: ' + (msg.split('\n')[0] ?? msg) }))
+    } finally {
+      setPublishingAccount(null)
+      setTimeout(() => setPublishStatus((prev) => {
+        const next = { ...prev }
+        delete next[account.pubkey]
+        return next
+      }), 8000)
+    }
+  }
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -295,12 +322,30 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                   <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-neutral-500">Accounts</label>
                   <div className="space-y-1">
                     {accounts.map((a) => (
-                      <div key={a.pubkey} className="rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-2 text-sm">
-                        <span className="text-neutral-200">{a.displayName || '(unnamed)'}</span>
-                        <span className="ml-2 text-xs text-neutral-500">{formatNpub(a.pubkey)}</span>
+                      <div key={a.pubkey} className="flex items-center justify-between gap-2 rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-2 text-sm">
+                        <div className="min-w-0">
+                          <span className="text-neutral-200">{a.displayName || '(unnamed)'}</span>
+                          <span className="ml-2 text-xs text-neutral-500">{formatNpub(a.pubkey)}</span>
+                          {publishStatus[a.pubkey] && (
+                            <span className={`ml-2 text-xs ${publishStatus[a.pubkey]!.startsWith('Failed') ? 'text-red-400' : 'text-emerald-400'}`}>
+                              {publishStatus[a.pubkey]}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handlePublishProfile(a)}
+                          disabled={publishingAccount === a.pubkey}
+                          title="Publish mail certificate + recipient policy (kind 30998) to your relays"
+                          className="shrink-0 rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-xs hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                        >
+                          {publishingAccount === a.pubkey ? 'Publishing…' : 'Publish profile'}
+                        </button>
                       </div>
                     ))}
                   </div>
+                  <p className="mt-1.5 text-xs text-neutral-500">
+                    Publishing makes the account reachable — contacts can only send mail to accounts with a published certificate.
+                  </p>
                 </div>
               </div>
             )}

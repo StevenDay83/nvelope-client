@@ -45,6 +45,7 @@ type Screen =
   | 'benchmark'
   | 'identity'
   | 'accountChoice'
+  | 'accountImport'
   | 'accountProfile'
   | 'accountCreated'
   | 'policies'
@@ -67,6 +68,7 @@ function stepIndexForScreen(screen: Screen): number {
     case 'benchmark': return 0
     case 'identity': return 1
     case 'accountChoice':
+    case 'accountImport':
     case 'accountProfile':
     case 'accountCreated':
     case 'policies':
@@ -178,6 +180,8 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
   const [nsecWarned, setNsecWarned] = useState(false)
   const [, setStoredBenchmarkLoaded] = useState(false)
   const [keypairGenerated, setKeypairGenerated] = useState(false)
+  const [importInput, setImportInput] = useState('')
+  const [importPreview, setImportPreview] = useState<{ pubkey: string; name?: string; picture?: string; about?: string } | null>(null)
 
   // Load benchmark from general client settings on mount
   useEffect(() => {
@@ -251,6 +255,43 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
     } finally {
       setWorking(false)
     }
+  }
+
+  const validateImport = async () => {
+    setError('')
+    setWorking(true)
+    setImportPreview(null)
+    try {
+      const trimmed = importInput.trim()
+      const decoded = decode(trimmed)
+      if (decoded.type !== 'nsec') throw new Error('Expected an nsec1… secret key')
+      const pubkey = getPublicKey(decoded.data as Uint8Array)
+      let preview: { pubkey: string; name?: string; picture?: string; about?: string } = { pubkey }
+      try {
+        const meta = await window.nvelope.profile.fetchMetadata(pubkey, data.relays)
+        if (meta) preview = { pubkey, name: meta.name, picture: meta.picture, about: meta.about }
+      } catch {
+        // profile fetch is best-effort — the account still imports without it
+      }
+      setImportPreview(preview)
+    } catch (e) {
+      setError('Invalid secret key: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const confirmImport = () => {
+    if (!importPreview) return
+    update('nsec', importInput.trim())
+    update('pubkey', importPreview.pubkey)
+    update('profile', {
+      imageUrl: importPreview.picture ?? '',
+      nickname: importPreview.name ?? '',
+      about: importPreview.about ?? '',
+    })
+    setKeypairGenerated(true)
+    setScreen('policies')
   }
 
   const generateCert = async () => {
@@ -352,9 +393,13 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         },
       })
 
-      // Publish kind 30998 certificate + kind 0 profile to relays
+      // Publish kind 30998 certificate + policy to relays. Imported accounts skip
+      // the kind-0 profile publish — we only carry name/about/picture and would
+      // clobber their existing full Nostr profile.
       try {
-        const pubResult = await window.nvelope.profile.publish(identity.id, data.pubkey)
+        const pubResult = await window.nvelope.profile.publish(identity.id, data.pubkey, {
+          skipKind0: data.accountType === 'existing',
+        })
         console.log('[onboarding] Profile published:', pubResult)
       } catch (publishErr) {
         console.warn('[onboarding] Profile publish failed:', publishErr)
@@ -601,11 +646,73 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
           }
           setError('')
           if (data.accountType === 'existing') {
-            setError('Importing existing accounts is not yet implemented')
+            setScreen('accountImport')
           } else {
             setScreen('accountProfile')
           }
         }}
+      />
+    </div>
+  )
+
+  const renderAccountImport = () => (
+    <div className="space-y-5">
+      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <h2 className="text-xl font-semibold">Import Existing Account</h2>
+      <p className="text-sm text-neutral-400 leading-relaxed">
+        Paste your account&apos;s secret key (nsec). We&apos;ll validate it, derive your public key, and try to pull your existing profile from your relays.
+      </p>
+      <p className="text-sm text-yellow-500">
+        Your nsec stays inside this identity&apos;s encrypted vault — it is never sent anywhere except as required to sign your events.
+      </p>
+
+      <div className="space-y-2">
+        <label className="mb-1 block text-sm font-medium">Secret key (nsec) *</label>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={importInput}
+            onChange={(e) => { setImportInput(e.target.value); setImportPreview(null) }}
+            placeholder="nsec1…"
+            className="flex-1 rounded border border-neutral-600 bg-neutral-900 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <button
+            onClick={validateImport}
+            disabled={working || !importInput.trim()}
+            className="rounded border border-neutral-600 px-4 py-2 text-sm hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {working ? 'Checking…' : 'Validate'}
+          </button>
+        </div>
+      </div>
+
+      {importPreview && (
+        <div className="rounded border border-green-800 bg-green-900/20 p-3 space-y-2">
+          <p className="text-sm text-green-400">Valid key — account found:</p>
+          <div className="flex items-center gap-3">
+            <div className="h-12 w-12 rounded-full bg-purple-600 flex items-center justify-center text-xs text-white overflow-hidden flex-shrink-0">
+              {importPreview.picture ? (
+                <img src={importPreview.picture} alt="avatar" className="h-full w-full object-cover" />
+              ) : (
+                '?'
+              )}
+            </div>
+            <div className="min-w-0 text-sm">
+              <p className="text-neutral-200">{importPreview.name || '(no profile name found)'}</p>
+              <p className="font-mono text-xs text-blue-400" title={npubEncode(importPreview.pubkey)}>
+                {formatNpub(importPreview.pubkey)}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      <NavButtons
+        onBack={() => setScreen('accountChoice')}
+        onNext={confirmImport}
+        nextDisabled={!importPreview}
       />
     </div>
   )
@@ -793,7 +900,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       </p>
 
       <NavButtons
-        onBack={() => setScreen('accountCreated')}
+        onBack={() => setScreen(data.accountType === 'existing' ? 'accountImport' : 'accountCreated')}
         onNext={() => setScreen('certificate')}
       />
     </div>
@@ -1004,6 +1111,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         {screen === 'benchmark' && renderBenchmark()}
         {screen === 'identity' && renderIdentity()}
         {screen === 'accountChoice' && renderAccountChoice()}
+        {screen === 'accountImport' && renderAccountImport()}
         {screen === 'accountProfile' && renderAccountProfile()}
         {screen === 'accountCreated' && renderAccountCreated()}
         {screen === 'policies' && renderPolicies()}

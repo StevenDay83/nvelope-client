@@ -98,7 +98,7 @@ async function publishEvent(
   return { ok: anyOk, details }
 }
 
-/** Publish kind 30998 certificate + kind 0 profile to relays */
+/** Publish kind 30998 certificate + policy, and (unless skipKind0) kind 0 profile to relays */
 async function publishProfileToRelays(
   account: {
     pubkey: string
@@ -109,6 +109,7 @@ async function publishProfileToRelays(
     about?: string
   },
   relays: string[],
+  options?: { skipKind0?: boolean },
 ): Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[] }> {
   const secretKey = decodeNsec(account.nsec)
   const errors: string[] = []
@@ -176,32 +177,35 @@ async function publishProfileToRelays(
       })
     }
 
-    // Publish kind 0 profile event
-    const profileContent = JSON.stringify({
-      name: account.displayName || '',
-      about: account.about || '',
-      picture: account.picture || '',
-    })
-
-    const profileEvent = finalizeEvent(
-      {
-        kind: 0,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [],
-        content: profileContent,
-      },
-      secretKey,
-    )
-
-    console.log('[publish] Publishing kind 0 profile:', profileEvent.id)
-    const profResult = await publishEvent(pool, relays, profileEvent, 'profile')
-    if (profResult.ok) {
-      results.profileEventId = profileEvent.id
-    } else {
-      errors.push('kind 0: failed on all relays')
-      profResult.details.forEach((d) => {
-        if (!d.ok) errors.push(`  ${d.url}: ${d.reason}`)
+    // Publish kind 0 profile event (skipped for imported accounts — we only carry
+    // name/about/picture and would clobber the account's existing full profile)
+    if (!options?.skipKind0) {
+      const profileContent = JSON.stringify({
+        name: account.displayName || '',
+        about: account.about || '',
+        picture: account.picture || '',
       })
+
+      const profileEvent = finalizeEvent(
+        {
+          kind: 0,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [],
+          content: profileContent,
+        },
+        secretKey,
+      )
+
+      console.log('[publish] Publishing kind 0 profile:', profileEvent.id)
+      const profResult = await publishEvent(pool, relays, profileEvent, 'profile')
+      if (profResult.ok) {
+        results.profileEventId = profileEvent.id
+      } else {
+        errors.push('kind 0: failed on all relays')
+        profResult.details.forEach((d) => {
+          if (!d.ok) errors.push(`  ${d.url}: ${d.reason}`)
+        })
+      }
     }
   } finally {
     pool.close(relays)
@@ -211,8 +215,8 @@ async function publishProfileToRelays(
 }
 
 export function registerSendHandlers(): void {
-  // Publish kind 30998 certificate + kind 0 profile
-  ipcMain.handle('profile:publish', async (_event, identityId: string, accountId: string) => {
+  // Publish kind 30998 certificate + policy (+ kind 0 profile unless skipKind0)
+  ipcMain.handle('profile:publish', async (_event, identityId: string, accountId: string, options?: { skipKind0?: boolean }) => {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
 
@@ -220,11 +224,32 @@ export function registerSendHandlers(): void {
     if (!account) throw new Error('Account not found')
 
     const relays = getRelaysFromSettings(session.payload.settings.preferences ?? {})
-    const result = await publishProfileToRelays(account, relays)
+    const result = await publishProfileToRelays(account, relays, options)
     if (!result.certificateEventId && !result.profileEventId) {
       throw new Error('Failed to publish on all relays:\n' + result.errors.join('\n'))
     }
     return result
+  })
+
+  // Fetch a kind-0 profile (name/about/picture/nip05) for wizard account import.
+  // Runs without an unlocked identity — the wizard has no session yet.
+  ipcMain.handle('profile:fetchMetadata', async (_event, pubkeyHex: string, relays?: string[]) => {
+    const relayList = Array.isArray(relays) && relays.length > 0 ? relays : getRelaysFromSettings({})
+    const pool = new SimplePool()
+    try {
+      const events = await pool.querySync(relayList, { kinds: [0], authors: [pubkeyHex] })
+      const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
+      if (!newest) return null
+      const content = JSON.parse(newest.content) as Record<string, unknown>
+      return {
+        name: typeof content.name === 'string' ? content.name : undefined,
+        about: typeof content.about === 'string' ? content.about : undefined,
+        picture: typeof content.picture === 'string' ? content.picture : undefined,
+        nip05: typeof content.nip05 === 'string' ? content.nip05 : undefined,
+      }
+    } finally {
+      pool.close(relayList)
+    }
   })
 
   ipcMain.handle(

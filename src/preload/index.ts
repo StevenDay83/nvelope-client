@@ -125,7 +125,8 @@ export interface SendAPI {
 }
 
 export interface ProfileAPI {
-  publish: (identityId: string, accountId: string) => Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[] }>
+  publish: (identityId: string, accountId: string, options?: { skipKind0?: boolean }) => Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[] }>
+  fetchMetadata: (pubkey: string, relays?: string[]) => Promise<{ name?: string; about?: string; picture?: string; nip05?: string } | null>
 }
 
 export interface ComposeAPI {
@@ -262,7 +263,8 @@ const sendProgressAPI: SendProgressAPI = {
 }
 
 const profileAPI: ProfileAPI = {
-  publish: (identityId, accountId) => ipcRenderer.invoke('profile:publish', identityId, accountId),
+  publish: (identityId, accountId, options) => ipcRenderer.invoke('profile:publish', identityId, accountId, options),
+  fetchMetadata: (pubkey, relays) => ipcRenderer.invoke('profile:fetchMetadata', pubkey, relays),
 }
 
 const composeAPI: ComposeAPI = {

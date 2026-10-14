@@ -100,8 +100,6 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
   const [scanning, setScanning] = useState(false)
   const [scanResult, setScanResult] = useState<string>('')
   const [newMailCount, setNewMailCount] = useState(0)
-  const [publishing, setPublishing] = useState(false)
-  const [publishStatus, setPublishStatus] = useState('')
   const [sendStatus] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearching, setIsSearching] = useState(false)
@@ -194,26 +192,6 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
     } finally {
       setScanning(false)
       setTimeout(() => setScanResult(''), 5000)
-    }
-  }
-
-  const handlePublishProfile = async () => {
-    setPublishing(true)
-    setPublishStatus('Publishing...')
-    try {
-      const result = await window.nvelope.profile.publish(identityId, selectedAccount)
-      if (result.certificateEventId) {
-        setPublishStatus('Profile published! Cert=' + result.certificateEventId.slice(0, 12) + '...')
-      } else {
-        setPublishStatus('Publish failed — check console')
-      }
-    } catch (e) {
-      const msg = String(e)
-      const firstLine = msg.split('\n')[0] ?? msg
-      setPublishStatus('Publish failed: ' + firstLine)
-    } finally {
-      setPublishing(false)
-      setTimeout(() => setPublishStatus(''), 8000)
     }
   }
 
@@ -463,11 +441,6 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
               {scanResult}
             </span>
           )}
-          {publishStatus && (
-            <span className={`text-sm ${publishStatus.includes('failed') ? 'text-red-400' : 'text-emerald-400'}`}>
-              {publishStatus}
-            </span>
-          )}
           {sendStatus && (
             <span className="text-sm text-emerald-400">{sendStatus}</span>
           )}
@@ -476,13 +449,6 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
               {newMailCount}
             </span>
           )}
-          <button
-            onClick={handlePublishProfile}
-            disabled={publishing}
-            className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
-          >
-            {publishing ? 'Publishing...' : 'Publish Profile'}
-          </button>
           <button
             onClick={() => {
               const acct = accounts.find((a) => a.pubkey === selectedAccount)
@@ -493,16 +459,28 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                 accountNpub: acct ? npubEncode(acct.pubkey) : undefined,
               })
             }}
-            className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 transition-colors"
+            title="Compose"
+            className="rounded-md bg-emerald-600 p-1.5 text-white hover:bg-emerald-500 transition-colors"
           >
-            Compose
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
           </button>
           <button
             onClick={handleScan}
             disabled={scanning}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+            title="Check Mail"
+            className="rounded-md bg-blue-600 p-1.5 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
           >
-            {scanning ? 'Scanning...' : 'Check Mail'}
+            {scanning ? (
+              <svg className="h-4 w-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M5 9a8 8 0 0114-3M19 15a8 8 0 01-14 3" />
+              </svg>
+            ) : (
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v9m0 0l-3-3m3 3l3-3M4 13h4l2 3h4l2-3h4v6a2 2 0 01-2 2H6a2 2 0 01-2-2v-6z" />
+              </svg>
+            )}
           </button>
           <button
             onClick={() => {
