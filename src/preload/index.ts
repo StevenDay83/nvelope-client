@@ -148,6 +148,7 @@ export interface ContactsListenerAPI {
   onChanged: (callback: (data: { identityId: string; accountId: string }) => void) => () => void
   onPrefill: (callback: (data: Record<string, unknown>) => void) => () => void
   sync: (identityId: string) => Promise<{ contacts: number; mailEnabled: number }>
+  checkCert: (identityId: string, accountId: string, pubkey: string) => Promise<{ mailEnabled: boolean }>
 }
 
 export interface SendProgressAPI {
@@ -296,6 +297,7 @@ const contactsListenerAPI: ContactsListenerAPI = {
     return () => ipcRenderer.removeListener('contacts:prefill', handler)
   },
   sync: (identityId) => ipcRenderer.invoke('contacts:sync', identityId),
+  checkCert: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:checkCert', identityId, accountId, pubkey),
 }
 
 contextBridge.exposeInMainWorld('nvelope', { vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, mail: mailListenerAPI, settings: settingsAPI, send: sendAPI, sendProgress: sendProgressAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })

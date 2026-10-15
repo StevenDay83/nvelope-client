@@ -7,13 +7,16 @@ interface IdentityMeta {
 
 interface Props {
   identities: IdentityMeta[]
+  initialIdentityId?: string
   onUnlock: (identityId: string, passphrase: string) => Promise<void>
   onCreateNew: () => void
   error: string
 }
 
-export default function IdentityUnlock({ identities, onUnlock, onCreateNew, error }: Props) {
-  const [selectedId, setSelectedId] = useState(identities[0]?.id ?? '')
+export default function IdentityUnlock({ identities, initialIdentityId, onUnlock, onCreateNew, error }: Props) {
+  const [selectedId, setSelectedId] = useState(
+    identities.find((i) => i.id === initialIdentityId)?.id ?? identities[0]?.id ?? '',
+  )
   const [passphrase, setPassphrase] = useState('')
   const [unlocking, setUnlocking] = useState(false)
 

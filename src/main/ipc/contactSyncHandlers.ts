@@ -122,6 +122,35 @@ async function syncAccountContacts(
 }
 
 export function registerContactSyncHandlers(): void {
+  ipcMain.handle('contacts:checkCert', async (_event, identityId: string, accountId: string, pubkey: string) => {
+    const session = getUnlockedSession(identityId)
+    if (!session) throw new Error('Identity is locked')
+    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
+    const db = getDb(identityId)
+    const transport = new CachingTransport(
+      new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
+      db,
+    )
+    try {
+      const certEvents = await transport.query(
+        { kinds: [PROFILE_KIND], authors: [pubkey], '#d': [CERT_D_TAG] } as Filter,
+        relays,
+      )
+      const newest = certEvents.sort((a, b) => b.created_at - a.created_at)[0]
+      const enabled = newest && newest.content ? 1 : 0
+      const existing = dao.getContact(db, accountId, pubkey)
+      if (existing && existing.isNostrMailEnabled !== enabled) {
+        dao.upsertContact(db, { ...existing, isNostrMailEnabled: enabled })
+      }
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('contacts:changed', { identityId, accountId })
+      }
+      return { mailEnabled: enabled === 1 }
+    } finally {
+      transport.close()
+    }
+  })
+
   ipcMain.handle('contacts:sync', async (_event, identityId: string) => {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')

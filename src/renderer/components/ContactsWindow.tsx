@@ -85,6 +85,7 @@ export default function ContactsWindow({ data }: Props) {
       identityId,
       accountId,
       accountDisplayName: accountDisplayName || undefined,
+      accountNpub: npubEncode(accountId),
       recipientNpub: npubEncode(contact.pubkey),
     })
   }
@@ -235,6 +236,13 @@ function ContactForm({
         cachedAt: Math.floor(Date.now() / 1000),
         isNostrMailEnabled: contact?.isNostrMailEnabled ?? 0,
       })
+      // Immediately check for a mail certificate so the Write button and
+      // composer availability are correct without a full relay sync
+      try {
+        await window.nvelope.contacts.checkCert(identityId, accountId, pubkey)
+      } catch (e) {
+        console.error('[contacts] cert check failed (will retry on next sync):', e)
+      }
       onDone()
     } catch (e) {
       setError(String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, ''))

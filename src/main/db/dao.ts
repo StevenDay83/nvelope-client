@@ -91,6 +91,11 @@ export function getMailByThread(db: Database.Database, accountId: string, thread
   return stmt.all(accountId, threadId) as MailRecord[]
 }
 
+export function getMailByEnvelopeId(db: Database.Database, envelopeEventId: string): MailRecord | undefined {
+  const stmt = db.prepare('SELECT * FROM mail WHERE envelopeEventId = ? LIMIT 1')
+  return stmt.get(envelopeEventId) as MailRecord | undefined
+}
+
 export function getMailByState(db: Database.Database, accountId: string, state: MailRecord['state']): MailRecord[] {
   const stmt = db.prepare('SELECT * FROM mail WHERE accountId = ? AND state = ? ORDER BY createdAt DESC')
   return stmt.all(accountId, state) as MailRecord[]

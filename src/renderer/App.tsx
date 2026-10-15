@@ -24,6 +24,7 @@ export default function App() {
   const [view, setView] = useState<AppView>('loading')
   const [identities, setIdentities] = useState<IdentityMeta[]>([])
   const [activeIdentity, setActiveIdentity] = useState<IdentityMeta | null>(null)
+  const [lastIdentityId, setLastIdentityId] = useState<string>('')
   const [accounts, setAccounts] = useState<AccountData[]>([])
   const [error, setError] = useState('')
   const [autoLockMinutes, setAutoLockMinutes] = useState(0)
@@ -52,6 +53,8 @@ export default function App() {
       }
       const list = await window.nvelope.vault.listIdentities()
       setIdentities(list)
+      const lastId = await window.nvelope.settings.get('lastIdentityId')
+      if (typeof lastId === 'string') setLastIdentityId(lastId)
       if (list.length === 0) {
         setView('onboard')
       } else {
@@ -71,6 +74,8 @@ export default function App() {
       if (identity) {
         setActiveIdentity(identity)
         setAccounts(newAccounts)
+        setLastIdentityId(identityId)
+        await window.nvelope.settings.set('lastIdentityId', identityId)
         await window.nvelope.relay.startAutoScan(identityId)
         setView('inbox')
       } else {
@@ -97,6 +102,8 @@ export default function App() {
       }
 
       await window.nvelope.relay.startAutoScan(identityId)
+      setLastIdentityId(identityId)
+      await window.nvelope.settings.set('lastIdentityId', identityId)
       // Fire-and-forget: pull kind 3 / NIP-51 contacts + certificate status in the background
       window.nvelope.contacts.sync(identityId).catch((e) => console.error('[contacts] sync failed:', e))
       setView('inbox')
@@ -163,6 +170,7 @@ export default function App() {
       <div className="flex h-screen items-center justify-center bg-neutral-900">
         <IdentityUnlock
           identities={identities}
+          initialIdentityId={lastIdentityId}
           onUnlock={handleUnlock}
           onCreateNew={() => setView('onboard')}
           error={error}

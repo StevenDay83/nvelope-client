@@ -95,6 +95,14 @@ export function getAllUnlockedSessions(): Array<{ identityId: string; payload: V
   return Array.from(unlockedSessions.entries()).map(([identityId, session]) => ({ identityId, ...session }))
 }
 
+/** Persist the current in-memory session payload (e.g. after the scanner
+ *  updates settings.lastRetrievedPerAccount) so cursors survive restarts. */
+export function persistUnlockedSession(identityId: string): void {
+  const session = unlockedSessions.get(identityId)
+  if (!session) return
+  persistVault(identityId, session.payload, session.passphrase)
+}
+
 export function registerVaultHandlers(): void {
   ipcMain.handle('vault:createIdentity', async (_event, name: string, passphrase: string) => {
     ensureVaultDir()

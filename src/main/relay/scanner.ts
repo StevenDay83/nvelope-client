@@ -50,9 +50,17 @@ async function storeDirectMail(
   identityId: string,
   accountId: string,
   mail: ScannedDirectMail,
-): Promise<void> {
+): Promise<boolean> {
   console.log(`[scanner] storeDirectMail START innerEventId=${mail.innerEventId.slice(0, 16)}...`)
   const db = getDb(identityId)
+
+  // Skip envelopes we already stored — re-inserting would clobber
+  // read/marked/folder state via insertMail's ON CONFLICT DO UPDATE.
+  if (dao.getMailByEnvelopeId(db, mail.event.id)) {
+    console.log(`[scanner] storeDirectMail: duplicate envelope ${mail.event.id.slice(0, 16)}... skipped`)
+    return false
+  }
+
   const inbox = dao.getSpecialFolder(db, accountId, 'inbox')
   const inboxId = inbox?.id ?? null
   console.log(`[scanner] storeDirectMail: inbox folder=${inbox?.name ?? 'NOT FOUND'} id=${inboxId}`)
@@ -92,6 +100,7 @@ async function storeDirectMail(
       messageData,
     })
     console.log(`[scanner] storeDirectMail: SUCCESS innerEventId=${mail.innerEventId.slice(0, 16)}...`)
+    return true
   } catch (e) {
     console.error(`[scanner] storeDirectMail: FAILED innerEventId=${mail.innerEventId.slice(0, 16)}... error=${String(e)}`)
     throw e
@@ -102,8 +111,13 @@ async function storeBroadcastMail(
   identityId: string,
   accountId: string,
   scanned: ScannedBroadcast,
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb(identityId)
+
+  if (dao.getMailByEnvelopeId(db, scanned.event.id)) {
+    return false
+  }
+
   const inbox = dao.getSpecialFolder(db, accountId, 'inbox')
   const inboxId = inbox?.id ?? null
 
@@ -137,6 +151,7 @@ async function storeBroadcastMail(
     envelopeEventId: scanned.event.id,
     messageData,
   })
+  return true
 }
 
 async function scanIdentity(
@@ -197,9 +212,10 @@ async function scanIdentity(
         console.log(`[scanner]   subject=${msg.getSubject()} formats=${JSON.stringify(msg.getContentFormats())}`)
         console.log(`[scanner]   contentWire=${JSON.stringify(msg.contentModel.toWire())}`)
         try {
-          await storeDirectMail(identityId, account.pubkey, mail)
-          directCount++
-          console.log(`[scanner] Stored mail ${i + 1} OK, directCount=${directCount}`)
+          if (await storeDirectMail(identityId, account.pubkey, mail)) {
+            directCount++
+            console.log(`[scanner] Stored mail ${i + 1} OK, directCount=${directCount}`)
+          }
         } catch (e) {
           console.error(`[scanner] Storing mail ${i + 1} FAILED:`, e)
         }
@@ -222,8 +238,9 @@ async function scanIdentity(
 
       const broadcastResult = await client.checkBroadcastInbox({ since })
       for (const mail of broadcastResult) {
-        await storeBroadcastMail(identityId, account.pubkey, mail)
-        broadcastCount++
+        if (await storeBroadcastMail(identityId, account.pubkey, mail)) {
+          broadcastCount++
+        }
       }
 
       // Update lastRetrieved
@@ -238,6 +255,11 @@ async function scanIdentity(
   }
 
   transport.close()
+
+  // Persist lastRetrievedPerAccount so the next scan (even after a restart)
+  // only fetches envelopes newer than this one
+  const { persistUnlockedSession } = await import('../ipc/vaultHandlers')
+  persistUnlockedSession(identityId)
 
   const totalNew = directCount + broadcastCount
   if (totalNew > 0 && mainWindow) {
