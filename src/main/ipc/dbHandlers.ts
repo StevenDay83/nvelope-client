@@ -169,6 +169,10 @@ export function registerDbHandlers(): void {
     return dao.getMailByState(getDb(identityId), accountId, state)
   })
 
+  ipcMain.handle('db:mail:getByThread', async (_event, identityId: string, accountId: string, threadId: string) => {
+    return dao.getMailByThread(getDb(identityId), accountId, threadId)
+  })
+
   ipcMain.handle('db:mail:countUnread', async (_event, identityId: string, accountId: string, folderId: number) => {
     return dao.countUnreadByFolder(getDb(identityId), accountId, folderId)
   })
@@ -191,6 +195,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:mail:softDelete', async (_event, identityId: string, innerEventId: string) => {
     dao.softDeleteMail(getDb(identityId), innerEventId)
+  })
+
+  ipcMain.handle('db:mail:delete', async (_event, identityId: string, innerEventId: string) => {
+    dao.deleteMail(getDb(identityId), innerEventId)
   })
 
   // --- Folders ---

@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { randomBytes } from 'node:crypto'
 import { decode } from 'nostr-tools/nip19'
 import { SimplePool } from 'nostr-tools'
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
@@ -264,6 +265,7 @@ export function registerSendHandlers(): void {
         body: string
         format: 'plaintext' | 'markdown' | 'html'
         links?: string[]
+        threadId?: string
       },
     ) => {
       const session = getUnlockedSession(identityId)
@@ -334,6 +336,11 @@ export function registerSendHandlers(): void {
         message.addExternalReference('http', link)
       }
 
+      // SPEC §3.1: thread_id is an opaque random key chosen by the thread
+      // originator and propagated unchanged by replies.
+      const threadId = payload.threadId ?? randomBytes(16).toString('hex')
+      message.setThreadId(threadId)
+
       console.log('[send:direct] Composer payload body length:', payload.body?.length ?? 0)
       console.log('[send:direct] Message contentWire before send:', JSON.stringify(message.contentModel.toWire()))
       console.log('[send:direct] Message formats:', JSON.stringify(message.getContentFormats()))
@@ -389,7 +396,7 @@ export function registerSendHandlers(): void {
         senderPubkey: account.pubkey,
         recipientPubkey: recipientHex,
         subject: payload.subject || null,
-        threadId: innerEventId,
+        threadId,
         isBroadcast: 0,
         createdAt: Math.floor(Date.now() / 1000),
         read: 1,

@@ -106,6 +106,26 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
   const [folderUnreadCounts, setFolderUnreadCounts] = useState<Record<number, number>>({})
   const [showSettings, setShowSettings] = useState(false)
   const [contactsByPubkey, setContactsByPubkey] = useState<Record<string, ContactRecord>>({})
+  const [threadMails, setThreadMails] = useState<MailRecord[]>([])
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [conversationView, setConversationView] = useState(true)
+
+  useEffect(() => {
+    window.nvelope.settings.getAll().then((s) => {
+      if (typeof s.conversationView === 'boolean') setConversationView(s.conversationView)
+    }).catch(() => {})
+  }, [])
+
+  const toggleConversationView = async () => {
+    const next = !conversationView
+    setConversationView(next)
+    try {
+      const all = await window.nvelope.settings.getAll()
+      await window.nvelope.settings.setAll({ ...all, conversationView: next })
+    } catch (e) {
+      console.error('[inbox] failed to persist view mode:', e)
+    }
+  }
 
   const loadContacts = useCallback(async () => {
     if (!selectedAccount) return
@@ -247,15 +267,19 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
     } catch {
       replyBody = '\n\n--- Original message ---\n'
     }
+    // Replying to your own Sent message replies to the original recipient
+    const replyTargetHex = mail.senderPubkey === selectedAccount ? mail.recipientPubkey : mail.senderPubkey
     window.nvelope.compose.open({
       identityId,
       accountId: selectedAccount,
       accountDisplayName: acct?.displayName || undefined,
       accountNpub: acct ? npubEncode(acct.pubkey) : undefined,
-      recipientNpub: npubEncode(mail.senderPubkey),
+      recipientNpub: replyTargetHex ? npubEncode(replyTargetHex) : undefined,
       subject: replySubject,
       body: replyBody,
       format: 'plaintext',
+      // SPEC §3.1: replies propagate the thread key unchanged
+      threadId: mail.threadId || mail.innerEventId,
     })
   }
 
@@ -281,14 +305,53 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
     })
   }
 
+  // Fetch the full conversation (spans folders, so Sent copies are included).
+  // Trashed messages and drafts are hidden from the conversation pane.
+  const loadThread = useCallback(async (mail: MailRecord): Promise<MailRecord[]> => {
+    const tid = mail.threadId || mail.innerEventId
+    try {
+      const thread = (await window.nvelope.db.mailGetByThread(identityId, selectedAccount, tid)) as MailRecord[]
+      const active = thread.filter((m) => m.state !== 'deleted' && m.state !== 'draft')
+      setThreadMails(active.length > 0 ? active : [mail])
+      return active.length > 0 ? active : [mail]
+    } catch (e) {
+      console.error('[inbox] failed to load thread:', e)
+      setThreadMails([mail])
+      return [mail]
+    }
+  }, [identityId, selectedAccount])
+
   const handleSelectMail = async (mail: MailRecord) => {
     setSelectedMail(mail)
-    if (!mail.read) {
-      await window.nvelope.db.mailMarkRead(identityId, mail.innerEventId, true)
+    setThreadMails([mail])
+    const thread = await loadThread(mail)
+    const newestUnread = [...thread].reverse().find((m) => !m.read)
+    const latest = thread[thread.length - 1]
+    setExpandedIds(new Set([newestUnread?.innerEventId ?? latest?.innerEventId ?? mail.innerEventId]))
+    // Opening a conversation marks the whole thread read
+    const unread = thread.filter((m) => !m.read)
+    if (unread.length > 0) {
+      await Promise.all(unread.map((m) => window.nvelope.db.mailMarkRead(identityId, m.innerEventId, true)))
       loadMails()
       loadFolders()
     }
   }
+
+  const toggleExpanded = (innerEventId: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(innerEventId)) next.delete(innerEventId)
+      else next.add(innerEventId)
+      return next
+    })
+  }
+
+  // Keep an open conversation in sync when mail changes (e.g. a reply arrives)
+  useEffect(() => {
+    if (!selectedMail) return
+    loadThread(selectedMail)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mails])
 
   const mailHasAttachments = (mail: MailRecord): boolean => {
     try {
@@ -392,14 +455,16 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
     return groups
   }, [mails])
 
-  // Flatten for display: one row per thread, showing newest message
+  // Conversation mode: one row per thread showing the newest message.
+  // Flat mode: every message, newest first.
   const displayMails = useMemo(() => {
+    if (!conversationView) return [...mails].sort((a, b) => b.createdAt - a.createdAt)
     const result: MailRecord[] = []
     for (const [, items] of threadGroups) {
       result.push(items[0]!) // Show newest in thread
     }
     return result.sort((a, b) => b.createdAt - a.createdAt)
-  }, [threadGroups])
+  }, [threadGroups, mails, conversationView])
 
   const threadCount = (mail: MailRecord): number => {
     const tid = mail.threadId || mail.innerEventId
@@ -598,7 +663,18 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
             <span className="text-xs font-medium text-neutral-500 uppercase tracking-wider">
               {isSearching ? `Search results` : selectedFolderName}
             </span>
-            <span className="text-xs text-neutral-600">{displayMails.length} message{displayMails.length !== 1 ? 's' : ''}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-neutral-600">{displayMails.length} {conversationView ? 'conversation' : 'message'}{displayMails.length !== 1 ? 's' : ''}</span>
+              <button
+                onClick={toggleConversationView}
+                title={conversationView ? 'Switch to message list' : 'Switch to conversation view'}
+                className={`rounded p-1 transition-colors ${conversationView ? 'text-blue-400 hover:bg-neutral-700' : 'text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300'}`}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4-.8L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {/* Message list */}
@@ -627,7 +703,7 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                         {getSenderDisplay(mail)}
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {threadCount(mail) > 1 && (
+                        {conversationView && threadCount(mail) > 1 && (
                           <span className="rounded-full bg-neutral-700 px-1.5 text-[10px] text-neutral-400">
                             {threadCount(mail)}
                           </span>
@@ -716,53 +792,125 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                 </div>
               </div>
 
-              {/* Message header */}
-              <div className="border-b border-neutral-700/50 bg-neutral-900 p-4">
-                <h2 className="text-lg font-semibold text-white leading-snug">
-                  {selectedMail.subject || '(no subject)'}
-                </h2>
-                <div className="mt-3 flex items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-sm font-bold text-emerald-400">
-                    {getInitials(getSenderDisplay(selectedMail))}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 text-sm font-medium text-neutral-200">
-                      {getSenderDisplay(selectedMail)}
-                      {selectedMail.senderPubkey !== 'nvelope' && !contactsByPubkey[selectedMail.senderPubkey] && (
-                        <button
-                          onClick={() => handleAddSenderToContacts(selectedMail)}
-                          title="Add sender to address book"
-                          className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 border border-neutral-700 hover:text-blue-300 hover:border-blue-600 transition-colors"
-                        >
-                          + Contact
-                        </button>
-                      )}
-                    </div>
-                    <div className="text-xs text-neutral-500 mt-0.5">
-                      <span className="text-neutral-600">To:</span>{' '}
-                      {(() => {
-                        const acct = accounts.find((a) => a.pubkey === selectedAccount)
-                        return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
-                      })()}
-                    </div>
-                    <div className="text-xs text-neutral-500 mt-0.5">
-                      {formatDateFull(selectedMail.createdAt)}
-                      {selectedMail.isBroadcast && (
-                        <span className="ml-2 rounded bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-medium text-purple-300">Broadcast</span>
-                      )}
+              {threadMails.length > 1 ? (
+                <>
+                  {/* Conversation header */}
+                  <div className="border-b border-neutral-700/50 bg-neutral-900 px-4 py-3">
+                    <h2 className="text-lg font-semibold text-white leading-snug">
+                      {selectedMail.subject || '(no subject)'}
+                    </h2>
+                    <div className="mt-0.5 text-xs text-neutral-500">
+                      {threadMails.length} messages in this conversation
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Message body */}
-              <div className="flex-1 overflow-y-auto p-5">
-                <div
-                  className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
-                  dangerouslySetInnerHTML={{ __html: getMailBodyHtml(selectedMail) }}
-                />
-                <ExternalReferenceList references={getExternalReferences(selectedMail)} />
-              </div>
+                  {/* Conversation messages, oldest first */}
+                  <div className="flex-1 overflow-y-auto space-y-2 p-4">
+                    {threadMails.map((m) => {
+                      const expanded = expandedIds.has(m.innerEventId)
+                      const isSelf = m.senderPubkey === selectedAccount
+                      const senderName = isSelf
+                        ? (accounts.find((a) => a.pubkey === selectedAccount)?.displayName || 'You')
+                        : getSenderDisplay(m)
+                      return (
+                        <div
+                          key={m.innerEventId}
+                          className={`rounded-md border bg-neutral-900 ${expanded ? 'border-neutral-700' : 'border-neutral-800'}`}
+                        >
+                          <button
+                            onClick={() => toggleExpanded(m.innerEventId)}
+                            className="flex w-full items-center gap-3 px-3 py-2 text-left"
+                          >
+                            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${isSelf ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                              {getInitials(senderName)}
+                            </div>
+                            <span className="shrink-0 text-sm font-medium text-neutral-200">{senderName}</span>
+                            {!expanded && (
+                              <span className="min-w-0 flex-1 truncate text-xs text-neutral-500">{getMailPreview(m)}</span>
+                            )}
+                            <span className="ml-auto shrink-0 text-xs text-neutral-500">{formatDateFull(m.createdAt)}</span>
+                          </button>
+                          {expanded && (
+                            <div className="border-t border-neutral-800 p-4">
+                              <div className="mb-3 flex items-center gap-1">
+                                <button
+                                  onClick={() => handleReply(m)}
+                                  className="flex items-center gap-1 rounded px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200 transition-colors"
+                                >
+                                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+                                  Reply
+                                </button>
+                                <button
+                                  onClick={() => handleForward(m)}
+                                  className="flex items-center gap-1 rounded px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200 transition-colors"
+                                >
+                                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+                                  Forward
+                                </button>
+                              </div>
+                              <div
+                                className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
+                                dangerouslySetInnerHTML={{ __html: getMailBodyHtml(m) }}
+                              />
+                              <ExternalReferenceList references={getExternalReferences(m)} />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Message header */}
+                  <div className="border-b border-neutral-700/50 bg-neutral-900 p-4">
+                    <h2 className="text-lg font-semibold text-white leading-snug">
+                      {selectedMail.subject || '(no subject)'}
+                    </h2>
+                    <div className="mt-3 flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-sm font-bold text-emerald-400">
+                        {getInitials(getSenderDisplay(selectedMail))}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-medium text-neutral-200">
+                          {getSenderDisplay(selectedMail)}
+                          {selectedMail.senderPubkey !== 'nvelope' && !contactsByPubkey[selectedMail.senderPubkey] && (
+                            <button
+                              onClick={() => handleAddSenderToContacts(selectedMail)}
+                              title="Add sender to address book"
+                              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 border border-neutral-700 hover:text-blue-300 hover:border-blue-600 transition-colors"
+                            >
+                              + Contact
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-xs text-neutral-500 mt-0.5">
+                          <span className="text-neutral-600">To:</span>{' '}
+                          {(() => {
+                            const acct = accounts.find((a) => a.pubkey === selectedAccount)
+                            return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
+                          })()}
+                        </div>
+                        <div className="text-xs text-neutral-500 mt-0.5">
+                          {formatDateFull(selectedMail.createdAt)}
+                          {selectedMail.isBroadcast ? (
+                            <span className="ml-2 rounded bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-medium text-purple-300">Broadcast</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Message body */}
+                  <div className="flex-1 overflow-y-auto p-5">
+                    <div
+                      className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
+                      dangerouslySetInnerHTML={{ __html: getMailBodyHtml(selectedMail) }}
+                    />
+                    <ExternalReferenceList references={getExternalReferences(selectedMail)} />
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-neutral-600">

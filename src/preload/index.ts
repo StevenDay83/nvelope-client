@@ -46,12 +46,14 @@ export interface DbAPI {
   mailInsert: (identityId: string, mail: unknown) => Promise<void>
   mailGetByFolder: (identityId: string, accountId: string, folderId: number) => Promise<unknown[]>
   mailGetByState: (identityId: string, accountId: string, state: string) => Promise<unknown[]>
+  mailGetByThread: (identityId: string, accountId: string, threadId: string) => Promise<unknown[]>
   mailCountUnread: (identityId: string, accountId: string, folderId: number) => Promise<number>
   mailSearch: (identityId: string, accountId: string, query: string) => Promise<unknown[]>
   mailMarkRead: (identityId: string, innerEventId: string, read: boolean) => Promise<void>
   mailToggleMarked: (identityId: string, innerEventId: string) => Promise<boolean>
   mailMoveToFolder: (identityId: string, innerEventId: string, folderId: number | null) => Promise<void>
   mailSoftDelete: (identityId: string, innerEventId: string) => Promise<void>
+  mailDelete: (identityId: string, innerEventId: string) => Promise<void>
   foldersGet: (identityId: string, accountId: string) => Promise<unknown[]>
   foldersGetSpecial: (identityId: string, accountId: string, type: string) => Promise<unknown | null>
   foldersCreate: (identityId: string, accountId: string, name: string) => Promise<number>
@@ -109,6 +111,7 @@ export interface SendAPI {
       body: string
       format: 'plaintext' | 'markdown' | 'html'
       links?: string[]
+      threadId?: string
     },
   ) => Promise<Array<{ recipient: string; eventId: string; published: unknown }>>
   saveDraft: (
@@ -192,12 +195,14 @@ const dbAPI: DbAPI = {
   mailInsert: (identityId, mail) => ipcRenderer.invoke('db:mail:insert', identityId, mail),
   mailGetByFolder: (identityId, accountId, folderId) => ipcRenderer.invoke('db:mail:getByFolder', identityId, accountId, folderId),
   mailGetByState: (identityId, accountId, state) => ipcRenderer.invoke('db:mail:getByState', identityId, accountId, state),
+  mailGetByThread: (identityId, accountId, threadId) => ipcRenderer.invoke('db:mail:getByThread', identityId, accountId, threadId),
   mailCountUnread: (identityId, accountId, folderId) => ipcRenderer.invoke('db:mail:countUnread', identityId, accountId, folderId),
   mailSearch: (identityId, accountId, query) => ipcRenderer.invoke('db:mail:search', identityId, accountId, query),
   mailMarkRead: (identityId, innerEventId, read) => ipcRenderer.invoke('db:mail:markRead', identityId, innerEventId, read),
   mailToggleMarked: (identityId, innerEventId) => ipcRenderer.invoke('db:mail:toggleMarked', identityId, innerEventId),
   mailMoveToFolder: (identityId, innerEventId, folderId) => ipcRenderer.invoke('db:mail:moveToFolder', identityId, innerEventId, folderId),
   mailSoftDelete: (identityId, innerEventId) => ipcRenderer.invoke('db:mail:softDelete', identityId, innerEventId),
+  mailDelete: (identityId, innerEventId) => ipcRenderer.invoke('db:mail:delete', identityId, innerEventId),
   foldersGet: (identityId, accountId) => ipcRenderer.invoke('db:folders:get', identityId, accountId),
   foldersGetSpecial: (identityId, accountId, type) => ipcRenderer.invoke('db:folders:getSpecial', identityId, accountId, type),
   foldersCreate: (identityId, accountId, name) => ipcRenderer.invoke('db:folders:create', identityId, accountId, name),

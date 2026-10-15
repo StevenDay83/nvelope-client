@@ -86,6 +86,11 @@ export function getMailByFolder(db: Database.Database, accountId: string, folder
   return stmt.all(accountId, folderId) as MailRecord[]
 }
 
+export function getMailByThread(db: Database.Database, accountId: string, threadId: string): MailRecord[] {
+  const stmt = db.prepare('SELECT * FROM mail WHERE accountId = ? AND threadId = ? ORDER BY createdAt ASC')
+  return stmt.all(accountId, threadId) as MailRecord[]
+}
+
 export function getMailByState(db: Database.Database, accountId: string, state: MailRecord['state']): MailRecord[] {
   const stmt = db.prepare('SELECT * FROM mail WHERE accountId = ? AND state = ? ORDER BY createdAt DESC')
   return stmt.all(accountId, state) as MailRecord[]
@@ -126,6 +131,11 @@ export function moveToFolder(db: Database.Database, innerEventId: string, folder
 
 export function softDeleteMail(db: Database.Database, innerEventId: string): void {
   const stmt = db.prepare("UPDATE mail SET state = 'deleted' WHERE innerEventId = ?")
+  stmt.run(innerEventId)
+}
+
+export function deleteMail(db: Database.Database, innerEventId: string): void {
+  const stmt = db.prepare('DELETE FROM mail WHERE innerEventId = ?')
   stmt.run(innerEventId)
 }
 

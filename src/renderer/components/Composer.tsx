@@ -15,6 +15,7 @@ interface Props {
   initialSubject?: string
   initialBody?: string
   initialFormat?: 'plaintext' | 'markdown' | 'html'
+  initialThreadId?: string
   windowMode?: boolean
   onClose: () => void
   onSent: () => void
@@ -29,6 +30,7 @@ export default function Composer({
   initialSubject = '',
   initialBody = '',
   initialFormat = 'plaintext',
+  initialThreadId,
   onClose,
   onSent,
 }: Props) {
@@ -48,6 +50,7 @@ export default function Composer({
   const [links, setLinks] = useState<string[]>([])
   const [linkInput, setLinkInput] = useState('')
   const [showLinkInput, setShowLinkInput] = useState(false)
+  const [draftId, setDraftId] = useState<string | null>(null)
 
   const addLink = useCallback(() => {
     const candidate = linkInput.trim()
@@ -154,18 +157,19 @@ export default function Composer({
     const timer = setInterval(async () => {
       if (!to && !subject && !body) return
       try {
-        await window.nvelope.send.saveDraft(identityId, accountId, null, {
+        const result = await window.nvelope.send.saveDraft(identityId, accountId, draftId, {
           recipientNpub: to || undefined,
           subject: subject || undefined,
           body: body || undefined,
           format,
         })
+        if (result.draftId !== draftId) setDraftId(result.draftId)
       } catch (e) {
         console.error('Autosave failed:', e)
       }
     }, 10000)
     return () => clearInterval(timer)
-  }, [to, subject, body, format, identityId, accountId])
+  }, [to, subject, body, format, identityId, accountId, draftId])
 
   // Listen for PoW progress
   useEffect(() => {
@@ -211,7 +215,15 @@ export default function Composer({
         body: body.trim(),
         format,
         links: links.length > 0 ? links : undefined,
+        threadId: initialThreadId,
       })
+      if (draftId) {
+        try {
+          await window.nvelope.db.mailDelete(identityId, draftId)
+        } catch (e) {
+          console.error('Draft cleanup failed:', e)
+        }
+      }
       setProgress('Message sent!')
       setTimeout(() => {
         onSent()
@@ -225,12 +237,13 @@ export default function Composer({
 
   const handleSaveDraft = async () => {
     try {
-      await window.nvelope.send.saveDraft(identityId, accountId, null, {
+      const result = await window.nvelope.send.saveDraft(identityId, accountId, draftId, {
         recipientNpub: to || undefined,
         subject: subject || undefined,
         body: body || undefined,
         format,
       })
+      if (result.draftId !== draftId) setDraftId(result.draftId)
       setProgress('Draft saved')
       setTimeout(() => setProgress(''), 2000)
     } catch (e) {
