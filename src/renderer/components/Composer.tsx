@@ -88,9 +88,19 @@ export default function Composer({
     return unsub
   }, [loadContacts, identityId, accountId])
 
-  // Contacts matching the current To input (skip filtering when an npub is fully selected)
+  // Multi-recipient: ';'-separated entries (conventional mail delimiter).
+  // Autocomplete/NIP-05 operate on the segment after the last ';'.
+  const lastSegment = useMemo(() => to.split(';').pop()?.trim() ?? '', [to])
+
+  const commitRecipient = (npub: string) => {
+    const head = to.split(';').slice(0, -1).map((s) => s.trim())
+    setTo([...head, npub].join('; ') + '; ')
+    setHighlightIndex(0)
+  }
+
+  // Contacts matching the current To segment (skip filtering when an npub is fully selected)
   const matches = useMemo(() => {
-    const q = to.trim().toLowerCase()
+    const q = lastSegment.toLowerCase()
     if (!q || (q.startsWith('npub1') && q.length > 20)) return []
     return contacts.filter((c) => {
       const npub = npubEncode(c.pubkey).toLowerCase()
@@ -100,29 +110,27 @@ export default function Composer({
         npub.startsWith(q)
       )
     }).slice(0, 8)
-  }, [to, contacts])
+  }, [lastSegment, contacts])
 
-  // The contact the current To value resolves to (for the confirmation hint)
+  // The contact the current To segment resolves to (for the confirmation hint)
   const selectedContact = useMemo(() => {
-    if (!to.startsWith('npub1')) return null
-    return contacts.find((c) => npubEncode(c.pubkey) === to) ?? null
-  }, [to, contacts])
+    if (!lastSegment.startsWith('npub1')) return null
+    return contacts.find((c) => npubEncode(c.pubkey) === lastSegment) ?? null
+  }, [lastSegment, contacts])
 
-  const showNip05Option = to.trim().includes('@') && !to.trim().startsWith('npub1')
+  const showNip05Option = lastSegment.includes('@') && !lastSegment.startsWith('npub1')
   const showDropdown = toFocused && (matches.length > 0 || showNip05Option)
 
   const selectContact = (contact: ContactRecord) => {
     if (!contact.isNostrMailEnabled) return
-    setTo(npubEncode(contact.pubkey))
-    setToFocused(false)
+    commitRecipient(npubEncode(contact.pubkey))
   }
 
   const resolveNip05 = async () => {
     setResolving(true)
     try {
-      const profile = await window.nvelope.nip05.resolve(to.trim())
-      setTo(npubEncode(profile.pubkey))
-      setToFocused(false)
+      const profile = await window.nvelope.nip05.resolve(lastSegment)
+      commitRecipient(npubEncode(profile.pubkey))
     } catch (e) {
       setError('NIP-05 resolution failed: ' + String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, ''))
     } finally {
@@ -171,16 +179,6 @@ export default function Composer({
     return () => clearInterval(timer)
   }, [to, subject, body, format, identityId, accountId, draftId])
 
-  // Listen for PoW progress
-  useEffect(() => {
-    const unsubscribe = window.nvelope.sendProgress.onProgress((data) => {
-      if (data.identityId === identityId && data.accountId === accountId && data.recipientNpub === to) {
-        setProgress(`Mining… attempt ${data.attempts}`)
-      }
-    })
-    return unsubscribe
-  }, [identityId, accountId, to])
-
   const insertFormat = useCallback((before: string, after: string) => {
     const el = textareaRef.current
     if (!el) return
@@ -197,8 +195,9 @@ export default function Composer({
   }, [])
 
   const handleSend = async () => {
-    if (!to.trim()) {
-      setError('Please choose a recipient (contact, npub, or user@domain)')
+    const segments = to.split(';').map((s) => s.trim()).filter(Boolean)
+    if (segments.length === 0) {
+      setError('Please choose at least one recipient (contact, npub, or user@domain)')
       return
     }
     if (!subject.trim() && !body.trim()) {
@@ -207,10 +206,40 @@ export default function Composer({
     }
     setSending(true)
     setError('')
-    setProgress('Sending…')
+    setProgress('Resolving recipients…')
     try {
-      await window.nvelope.send.direct(identityId, accountId, {
-        recipientNpub: to.trim(),
+      const resolved: string[] = []
+      const failures: string[] = []
+      for (const segment of segments) {
+        let npub: string | null = null
+        if (segment.startsWith('npub1')) {
+          npub = segment
+        } else if (segment.includes('@')) {
+          try {
+            npub = npubEncode((await window.nvelope.nip05.resolve(segment)).pubkey)
+          } catch { /* falls through to failures */ }
+        } else {
+          const q = segment.toLowerCase()
+          const contact = contacts.find(
+            (c) => c.displayName?.toLowerCase() === q || c.nip05?.toLowerCase() === q,
+          )
+          if (contact) npub = npubEncode(contact.pubkey)
+        }
+        if (npub) {
+          if (!resolved.includes(npub)) resolved.push(npub)
+        } else {
+          failures.push(segment)
+        }
+      }
+      if (failures.length > 0) {
+        setError(`Could not resolve: ${failures.join(', ')} — use npub1…, user@domain, or a contact name`)
+        setSending(false)
+        setProgress('')
+        return
+      }
+      setProgress('Queueing…')
+      await window.nvelope.send.queue(identityId, accountId, {
+        recipients: resolved,
         subject: subject.trim(),
         body: body.trim(),
         format,
@@ -224,7 +253,7 @@ export default function Composer({
           console.error('Draft cleanup failed:', e)
         }
       }
-      setProgress('Message sent!')
+      setProgress('Queued for sending — see Outbox')
       setTimeout(() => {
         onSent()
       }, 800)
@@ -336,7 +365,7 @@ export default function Composer({
               toBlurTimer.current = setTimeout(() => setToFocused(false), 150)
             }}
             onKeyDown={handleToKeyDown}
-            placeholder="Name, npub1..., or user@domain"
+            placeholder="Name, npub1..., or user@domain — separate multiple recipients with ;"
             className="flex-1 bg-transparent py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none"
           />
           {selectedContact && (
@@ -374,7 +403,7 @@ export default function Composer({
                   onMouseEnter={() => setHighlightIndex(matches.length)}
                   className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${highlightIndex === matches.length ? 'bg-blue-600/20 text-blue-200' : 'text-neutral-200'}`}
                 >
-                  <span>{resolving ? 'Resolving…' : `Resolve ${to.trim()} via NIP-05`}</span>
+                  <span>{resolving ? 'Resolving…' : `Resolve ${lastSegment} via NIP-05`}</span>
                 </button>
               )}
             </div>
@@ -438,7 +467,7 @@ export default function Composer({
         </div>
       )}
 
-      {/* Formatting toolbar (markdown only) */}
+      {/* Formatting toolbar (markdown / html) */}
       {isMarkdown && (
         <div className="flex items-center gap-1 border-b border-neutral-700 bg-neutral-800 px-3 py-1.5">
           <ToolbarButton onClick={() => insertFormat('**', '**')} title="Bold">
@@ -467,6 +496,40 @@ export default function Composer({
           <div className="mx-1 h-4 w-px bg-neutral-600" />
           <ToolbarButton onClick={() => insertFormat('[', '](url)')} title="Link">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+          </ToolbarButton>
+        </div>
+      )}
+      {format === 'html' && (
+        <div className="flex items-center gap-1 border-b border-neutral-700 bg-neutral-800 px-3 py-1.5">
+          <ToolbarButton onClick={() => insertFormat('<strong>', '</strong>')} title="Bold">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4h8a4 4 0 014 4 4 4 0 01-4 4H6V4zm0 8h9a4 4 0 014 4 4 4 0 01-4 4H6v-8z" /></svg>
+          </ToolbarButton>
+          <ToolbarButton onClick={() => insertFormat('<em>', '</em>')} title="Italic">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l-4 16" /></svg>
+          </ToolbarButton>
+          <div className="mx-1 h-4 w-px bg-neutral-600" />
+          <ToolbarButton onClick={() => insertFormat('<h2>', '</h2>')} title="Heading">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>
+          </ToolbarButton>
+          <ToolbarButton onClick={() => insertFormat('<blockquote>', '</blockquote>')} title="Quote">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" /></svg>
+          </ToolbarButton>
+          <ToolbarButton onClick={() => insertFormat('<pre><code>', '</code></pre>')} title="Code block">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+          </ToolbarButton>
+          <div className="mx-1 h-4 w-px bg-neutral-600" />
+          <ToolbarButton onClick={() => insertFormat('<ul>\n  <li>', '</li>\n</ul>')} title="Bullet list">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+          </ToolbarButton>
+          <ToolbarButton onClick={() => insertFormat('<ol>\n  <li>', '</li>\n</ol>')} title="Numbered list">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg>
+          </ToolbarButton>
+          <div className="mx-1 h-4 w-px bg-neutral-600" />
+          <ToolbarButton onClick={() => insertFormat('<a href="https://">', '</a>')} title="Link">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+          </ToolbarButton>
+          <ToolbarButton onClick={() => insertFormat('<p>', '</p>')} title="Paragraph">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h10" /></svg>
           </ToolbarButton>
         </div>
       )}

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { npubEncode } from 'nostr-tools/nip19'
-import { renderMarkdown } from '../lib/markdown'
 import SettingsPanel from './SettingsPanel'
-import type { ContactRecord } from '../../preload'
+import MailBody from './MailBody'
+import type { ContactRecord, OutboxProgress } from '../../preload'
 
 interface FolderRecord {
   id: number
@@ -42,6 +42,7 @@ interface AccountData {
 interface Props {
   identityId: string
   accounts: AccountData[]
+  onAccountsChanged?: (accounts: AccountData[]) => void
   onLock: () => void
   identityName: string
   onIdentityRenamed?: (name: string) => void
@@ -91,7 +92,7 @@ function formatDateFull(ts: number): string {
   })
 }
 
-export default function InboxView({ identityId, accounts, onLock, identityName, onIdentityRenamed, onSettingsClosed }: Props) {
+export default function InboxView({ identityId, accounts, onAccountsChanged, onLock, identityName, onIdentityRenamed, onSettingsClosed }: Props) {
   const [selectedAccount, setSelectedAccount] = useState(accounts[0]?.pubkey ?? '')
   const [folders, setFolders] = useState<FolderRecord[]>([])
   const [selectedFolder, setSelectedFolder] = useState<number | null>(null)
@@ -109,12 +110,26 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
   const [threadMails, setThreadMails] = useState<MailRecord[]>([])
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [conversationView, setConversationView] = useState(true)
+  const [outboxProgress, setOutboxProgress] = useState<Record<string, OutboxProgress>>({})
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; mail: MailRecord } | null>(null)
+  const [showMoveMenu, setShowMoveMenu] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [addingFolder, setAddingFolder] = useState(false)
 
   useEffect(() => {
     window.nvelope.settings.getAll().then((s) => {
       if (typeof s.conversationView === 'boolean') setConversationView(s.conversationView)
     }).catch(() => {})
   }, [])
+
+  // Fall back to the first account if the selected one was removed
+  useEffect(() => {
+    if (accounts.length === 0) {
+      if (selectedAccount) setSelectedAccount('')
+    } else if (!accounts.some((a) => a.pubkey === selectedAccount)) {
+      setSelectedAccount(accounts[0].pubkey)
+    }
+  }, [accounts, selectedAccount])
 
   const toggleConversationView = async () => {
     const next = !conversationView
@@ -193,6 +208,100 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
     })
     return unsubscribe
   }, [identityId, loadMails, loadFolders])
+
+  // Listen for outbox queue progress (mining, sent, cancelled, errors)
+  useEffect(() => {
+    const unsubscribe = window.nvelope.outbox.onProgress((data) => {
+      if (data.identityId !== identityId) return
+      setOutboxProgress((prev) => {
+        const next = { ...prev }
+        if (data.phase === 'sent' || data.phase === 'cancelled') delete next[data.innerEventId]
+        else next[data.innerEventId] = data
+        return next
+      })
+      if (data.phase !== 'mining') {
+        loadMails()
+        loadFolders()
+      }
+    })
+    return unsubscribe
+  }, [identityId, loadMails, loadFolders])
+
+  const handleOutboxCancel = async (mail: MailRecord) => {
+    await window.nvelope.send.cancel(identityId, mail.innerEventId)
+  }
+
+  const handleOutboxRetry = async (mail: MailRecord) => {
+    await window.nvelope.send.retry(identityId, mail.innerEventId)
+    loadMails()
+  }
+
+  const handleMoveToFolder = async (mail: MailRecord, folderId: number) => {
+    await window.nvelope.db.mailMoveToFolder(identityId, mail.innerEventId, folderId)
+    setContextMenu(null)
+    setShowMoveMenu(false)
+    loadMails()
+    loadFolders()
+    if (selectedMail?.innerEventId === mail.innerEventId) {
+      setSelectedMail(null)
+      setThreadMails([])
+    }
+  }
+
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim()
+    if (!name) return
+    await window.nvelope.db.foldersCreate(identityId, selectedAccount, name)
+    setNewFolderName('')
+    setAddingFolder(false)
+    loadFolders()
+  }
+
+  const handleDeleteFolder = async (folder: FolderRecord) => {
+    const contents = (await window.nvelope.db.mailGetByFolder(identityId, selectedAccount, folder.id)) as MailRecord[]
+    if (contents.length > 0) {
+      alert(`Folder "${folder.name}" is not empty. Move or delete its messages first.`)
+      return
+    }
+    if (!confirm(`Delete folder "${folder.name}"?`)) return
+    await window.nvelope.db.foldersDelete(identityId, folder.id)
+    if (selectedFolder === folder.id) {
+      setSelectedFolder(folders.find((f) => f.type === 'inbox')?.id ?? null)
+      setSelectedMail(null)
+      setThreadMails([])
+    }
+    loadFolders()
+  }
+
+  // Folders eligible as move targets (not queue/system folders, not the current one)
+  const moveTargets = folders.filter(
+    (f) => (f.type === 'inbox' || f.type === 'junk' || f.type === 'user') && f.id !== selectedFolder,
+  )
+
+  const selectedFolderType = folders.find((f) => f.id === selectedFolder)?.type
+
+  // Recipient list label for mail we sent (used in Sent/Outbox rows and headers)
+  const getRecipientsDisplay = (mail: MailRecord): string => {
+    let toList: string[] = []
+    try {
+      const data = JSON.parse(mail.messageData)
+      if (Array.isArray(data.mailToList)) toList = data.mailToList
+    } catch { /* fall back to recipientPubkey */ }
+    if (toList.length === 0 && mail.recipientPubkey) toList = [mail.recipientPubkey]
+    if (toList.length === 0) return '(no recipient)'
+    const first = toList[0]!
+    const contact = contactsByPubkey[first]
+    const label = contact?.displayName || contact?.nip05 || formatNpub(first)
+    return toList.length > 1 ? `${label} +${toList.length - 1}` : label
+  }
+
+  // Sent/Outbox rows show the recipient; everything else shows the sender
+  const getRowDisplay = (mail: MailRecord): string => {
+    if (selectedFolderType === 'sent' || selectedFolderType === 'outbox' || mail.senderPubkey === selectedAccount) {
+      return getRecipientsDisplay(mail)
+    }
+    return getSenderDisplay(mail)
+  }
 
   const handleScan = async () => {
     setScanning(true)
@@ -323,6 +432,8 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
 
   const handleSelectMail = async (mail: MailRecord) => {
     setSelectedMail(mail)
+    setShowMoveMenu(false)
+    setContextMenu(null)
     setThreadMails([mail])
     const thread = await loadThread(mail)
     const newestUnread = [...thread].reverse().find((m) => !m.read)
@@ -405,29 +516,6 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
       accountDisplayName: acct?.displayName || undefined,
       prefillPubkey: mail.senderPubkey,
     })
-  }
-
-  const getMailBodyHtml = (mail: MailRecord): string => {
-    try {
-      const data = JSON.parse(mail.messageData)
-      if (data.bodyText) {
-        // Detect if it's HTML
-        if (data.formats?.includes('html') || data.messageType?.html) {
-          return data.bodyText
-        }
-        // Render markdown
-        return renderMarkdown(data.bodyText)
-      }
-      const mt = data.messageType ?? {}
-      if (mt.md) return renderMarkdown(atob(mt.md))
-      if (mt.plaintext) return renderMarkdown(atob(mt.plaintext))
-      if (mt.html) return atob(mt.html)
-      if (data.formats?.markdown) return renderMarkdown(data.formats.markdown)
-      if (data.formats?.plaintext) return renderMarkdown(data.formats.plaintext)
-      return renderMarkdown(mail.messageData)
-    } catch {
-      return renderMarkdown(mail.messageData)
-    }
   }
 
   const getMailPreview = (mail: MailRecord): string => {
@@ -598,32 +686,75 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                 const unread = folderUnreadCounts[folder.id] ?? 0
                 const isActive = selectedFolder === folder.id
                 return (
-                  <button
-                    key={folder.id}
-                    onClick={() => {
-                      setSelectedFolder(folder.id)
-                      setSelectedMail(null)
-                      setSearchQuery('')
-                      setIsSearching(false)
-                    }}
-                    className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm text-left transition-colors ${
-                      isActive
-                        ? 'bg-blue-600/20 text-blue-300'
-                        : 'text-neutral-300 hover:bg-neutral-800'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <FolderIcon type={folder.type} />
-                      <span>{folder.name}</span>
-                    </div>
-                    {unread > 0 && (
-                      <span className="rounded-full bg-blue-500 px-1.5 py-0 text-[10px] font-bold text-white min-w-[18px] text-center">
-                        {unread}
-                      </span>
+                  <div key={folder.id} className="group/folder relative">
+                    <button
+                      onClick={() => {
+                        setSelectedFolder(folder.id)
+                        setSelectedMail(null)
+                        setSearchQuery('')
+                        setIsSearching(false)
+                      }}
+                      className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm text-left transition-colors ${
+                        isActive
+                          ? 'bg-blue-600/20 text-blue-300'
+                          : 'text-neutral-300 hover:bg-neutral-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <FolderIcon type={folder.type} />
+                        <span>{folder.name}</span>
+                      </div>
+                      {unread > 0 && (
+                        <span className="rounded-full bg-blue-500 px-1.5 py-0 text-[10px] font-bold text-white min-w-[18px] text-center">
+                          {unread}
+                        </span>
+                      )}
+                    </button>
+                    {folder.type === 'user' && (
+                      <button
+                        onClick={() => handleDeleteFolder(folder)}
+                        title={`Delete folder ${folder.name}`}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1 text-xs text-neutral-600 opacity-0 group-hover/folder:opacity-100 hover:text-red-400 transition-opacity"
+                      >
+                        ×
+                      </button>
                     )}
-                  </button>
+                  </div>
                 )
               })}
+              {addingFolder ? (
+                <div className="flex items-center gap-1 px-1 pt-1">
+                  <input
+                    type="text"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleCreateFolder()
+                      if (e.key === 'Escape') { setAddingFolder(false); setNewFolderName('') }
+                    }}
+                    placeholder="Folder name"
+                    autoFocus
+                    className="min-w-0 flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-sm outline-none focus:border-blue-500"
+                  />
+                  <button
+                    onClick={handleCreateFolder}
+                    disabled={!newFolderName.trim()}
+                    className="rounded-md border border-neutral-600 bg-neutral-800 px-2 py-1 text-xs hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                  >
+                    Add
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAddingFolder(true)}
+                  className="mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300 transition-colors"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                  </svg>
+                  New folder
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -692,6 +823,10 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                   <button
                     key={mail.innerEventId}
                     onClick={() => handleSelectMail(mail)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setContextMenu({ x: e.clientX, y: e.clientY, mail })
+                    }}
                     className={`group flex w-full flex-col gap-1 px-3 py-2.5 text-left transition-colors ${
                       selectedMail?.innerEventId === mail.innerEventId
                         ? 'bg-blue-600/10'
@@ -700,7 +835,7 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className={`text-sm truncate ${mail.read ? 'font-normal' : 'font-semibold'}`}>
-                        {getSenderDisplay(mail)}
+                        {getRowDisplay(mail)}
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
                         {conversationView && threadCount(mail) > 1 && (
@@ -740,11 +875,55 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                       </span>
                       <span className="text-xs text-neutral-600 truncate">{getMailPreview(mail)}</span>
                     </div>
+                    {selectedFolderType === 'outbox' && (
+                      <OutboxStatusRow
+                        mail={mail}
+                        progress={outboxProgress[mail.innerEventId]}
+                        onCancel={() => handleOutboxCancel(mail)}
+                        onRetry={() => handleOutboxRetry(mail)}
+                      />
+                    )}
                   </button>
                 ))}
               </div>
             )}
           </div>
+
+          {/* Right-click context menu */}
+          {contextMenu && (
+            <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null) }}>
+              <div
+                className="absolute min-w-44 rounded-md border border-neutral-700 bg-neutral-800 py-1 shadow-xl"
+                style={{ left: Math.min(contextMenu.x, window.innerWidth - 200), top: Math.min(contextMenu.y, window.innerHeight - 220) }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wider text-neutral-500">Move to</div>
+                {moveTargets.map((f) => (
+                  <button
+                    key={f.id}
+                    onClick={() => handleMoveToFolder(contextMenu.mail, f.id)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-neutral-200 hover:bg-neutral-700"
+                  >
+                    <FolderIcon type={f.type} />
+                    {f.name}
+                  </button>
+                ))}
+                <div className="my-1 border-t border-neutral-700" />
+                <button
+                  onClick={() => { handleMarkRead(contextMenu.mail, !contextMenu.mail.read); setContextMenu(null) }}
+                  className="w-full px-3 py-1.5 text-left text-sm text-neutral-200 hover:bg-neutral-700"
+                >
+                  {contextMenu.mail.read ? 'Mark as unread' : 'Mark as read'}
+                </button>
+                <button
+                  onClick={() => { handleDelete(contextMenu.mail); setContextMenu(null) }}
+                  className="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-neutral-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Preview pane */}
@@ -761,6 +940,30 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
                   <span className="text-xs">Forward</span>
                 </ActionButton>
+                <div className="relative">
+                  <ActionButton onClick={() => setShowMoveMenu((v) => !v)} title="Move to folder">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                    <span className="text-xs">Move</span>
+                  </ActionButton>
+                  {showMoveMenu && (
+                    <div className="absolute left-0 top-full z-30 min-w-40 rounded-md border border-neutral-700 bg-neutral-800 py-1 shadow-xl">
+                      {moveTargets.length === 0 ? (
+                        <div className="px-3 py-1.5 text-xs text-neutral-500">No other folders</div>
+                      ) : (
+                        moveTargets.map((f) => (
+                          <button
+                            key={f.id}
+                            onClick={() => handleMoveToFolder(selectedMail, f.id)}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-neutral-200 hover:bg-neutral-700"
+                          >
+                            <FolderIcon type={f.type} />
+                            {f.name}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
                 <div className="mx-1 h-4 w-px bg-neutral-600" />
                 <ActionButton onClick={() => handleSpam(selectedMail)} title="Spam">
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
@@ -848,10 +1051,7 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                                   Forward
                                 </button>
                               </div>
-                              <div
-                                className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
-                                dangerouslySetInnerHTML={{ __html: getMailBodyHtml(m) }}
-                              />
+                              <MailBody mail={m} />
                               <ExternalReferenceList references={getExternalReferences(m)} />
                             </div>
                           )}
@@ -886,10 +1086,12 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
                         </div>
                         <div className="text-xs text-neutral-500 mt-0.5">
                           <span className="text-neutral-600">To:</span>{' '}
-                          {(() => {
-                            const acct = accounts.find((a) => a.pubkey === selectedAccount)
-                            return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
-                          })()}
+                          {selectedMail.senderPubkey === selectedAccount
+                            ? getRecipientsDisplay(selectedMail)
+                            : (() => {
+                                const acct = accounts.find((a) => a.pubkey === selectedAccount)
+                                return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
+                              })()}
                         </div>
                         <div className="text-xs text-neutral-500 mt-0.5">
                           {formatDateFull(selectedMail.createdAt)}
@@ -903,10 +1105,7 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
 
                   {/* Message body */}
                   <div className="flex-1 overflow-y-auto p-5">
-                    <div
-                      className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
-                      dangerouslySetInnerHTML={{ __html: getMailBodyHtml(selectedMail) }}
-                    />
+                    <MailBody mail={selectedMail} />
                     <ExternalReferenceList references={getExternalReferences(selectedMail)} />
                   </div>
                 </>
@@ -933,6 +1132,7 @@ export default function InboxView({ identityId, accounts, onLock, identityName, 
             onSettingsClosed?.()
           }}
           onRenamed={(name) => onIdentityRenamed?.(name)}
+          onAccountsChanged={onAccountsChanged}
         />
       )}
     </div>
@@ -992,6 +1192,52 @@ function ExternalReferenceList({ references }: { references: string[][] }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/** Outbox row status: live mining progress while processing, queue/error state otherwise. */
+function OutboxStatusRow({ mail, progress, onCancel, onRetry }: { mail: MailRecord; progress?: OutboxProgress; onCancel: () => void; onRetry: () => void }) {
+  let sendError = ''
+  try {
+    sendError = JSON.parse(mail.messageData).sendError ?? ''
+  } catch { /* no error stored */ }
+
+  if (mail.state === 'processing') {
+    const mining = progress?.phase === 'mining'
+    const detail = mining && progress?.recipientCount && progress.recipientCount > 1
+      ? ` (recipient ${(progress.recipientIndex ?? 0) + 1}/${progress.recipientCount})`
+      : ''
+    const eta = mining && progress?.etaMinutes ? ` — about ${progress.etaMinutes} min remaining` : ''
+    return (
+      <div className="flex items-center gap-2 text-xs text-blue-300">
+        <svg className="h-3.5 w-3.5 shrink-0 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M5 9a8 8 0 0114-3M19 15a8 8 0 01-14 3" />
+        </svg>
+        <span className="truncate">{mining ? `Processing mail${detail}${eta}` : 'Sending…'}</span>
+        <span
+          role="button"
+          onClick={(e) => { e.stopPropagation(); onCancel() }}
+          className="ml-auto shrink-0 cursor-pointer rounded border border-neutral-600 px-1.5 py-0.5 text-[10px] text-neutral-400 hover:text-red-400 transition-colors"
+        >
+          Cancel
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className={`truncate ${sendError ? 'text-red-400' : 'text-neutral-500'}`}>
+        {sendError ? `Failed: ${sendError}` : 'Queued — waiting to send'}
+      </span>
+      <span
+        role="button"
+        onClick={(e) => { e.stopPropagation(); onRetry() }}
+        className="ml-auto shrink-0 cursor-pointer rounded border border-neutral-600 px-1.5 py-0.5 text-[10px] text-neutral-400 hover:text-emerald-400 transition-colors"
+      >
+        {sendError ? 'Retry' : 'Send now'}
+      </span>
     </div>
   )
 }

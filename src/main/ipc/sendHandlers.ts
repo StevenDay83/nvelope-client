@@ -1,41 +1,13 @@
 import { ipcMain } from 'electron'
-import { randomBytes } from 'node:crypto'
 import { decode } from 'nostr-tools/nip19'
 import { SimplePool } from 'nostr-tools'
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import type { Event as NostrEvent } from 'nostr-tools'
-import {
-  NvelopeClient,
-  DirectMessage,
-  NostrToolsTransport,
-  NsecSigner,
-} from 'nvelope-core'
+import { RecipientPolicy } from 'nvelope-core'
 import { getUnlockedSession } from './vaultHandlers'
 import { getDb } from './dbHandlers'
-import { CachingTransport } from '../relay/cachingTransport'
+import { getBenchmarkHashesPerMinute } from '../clientSettings'
 import * as dao from '../db/dao'
-
-const MAX_EXTERNAL_REFERENCES = 10
-
-/** External references (SPEC §3.1): this client emits http(s) links only. */
-function validateLinks(links: string[]): string[] {
-  if (links.length > MAX_EXTERNAL_REFERENCES) {
-    throw new Error(`Too many attachments (max ${MAX_EXTERNAL_REFERENCES} links)`)
-  }
-  return links.map((link) => {
-    const parsed = new URL(link)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error(`Only http/https links are supported: ${link}`)
-    }
-    return parsed.toString()
-  })
-}
-
-let mainWindow: Electron.BrowserWindow | null = null
-
-export function setMainWindowForSend(win: Electron.BrowserWindow | null): void {
-  mainWindow = win
-}
 
 function decodeNsec(nsec: string): Uint8Array {
   const result = decode(nsec)
@@ -99,6 +71,33 @@ async function publishEvent(
   return { ok: anyOk, details }
 }
 
+export interface PolicyPreferences {
+  contactsMinutes?: number
+  nonContactsMinutes?: number
+  denyUntrusted?: boolean
+}
+
+/** Convert "minutes of sender effort" sliders to NIP-13 leading-zero bits via
+ *  the benchmarked local hash rate (expected hashes = 2^bits). */
+export function minutesToLeadingZeros(minutes: number | undefined, hashesPerMinute: number | undefined): number | undefined {
+  if (!minutes || minutes <= 0) return undefined
+  if (!hashesPerMinute || hashesPerMinute <= 0) {
+    console.warn('[policy] no benchmark hash rate — treating non-zero minutes as no PoW requirement')
+    return undefined
+  }
+  return Math.max(0, Math.round(Math.log2(minutes * hashesPerMinute)))
+}
+
+function buildRecipientPolicyJson(policies: PolicyPreferences | undefined, hashesPerMinute: number | undefined): string {
+  const policy = new RecipientPolicy()
+  const contactsBits = minutesToLeadingZeros(policies?.contactsMinutes, hashesPerMinute)
+  const untrustedBits = minutesToLeadingZeros(policies?.nonContactsMinutes, hashesPerMinute)
+  if (contactsBits !== undefined) policy.setAllowContactsPolicy({ leadingZeros: contactsBits })
+  if (untrustedBits !== undefined) policy.setAllowUntrustedPolicy({ leadingZeros: untrustedBits })
+  if (policies?.denyUntrusted) policy.setDenyUntrusted(true)
+  return policy.toJson()
+}
+
 /** Publish kind 30998 certificate + policy, and (unless skipKind0) kind 0 profile to relays */
 async function publishProfileToRelays(
   account: {
@@ -110,11 +109,11 @@ async function publishProfileToRelays(
     about?: string
   },
   relays: string[],
-  options?: { skipKind0?: boolean },
-): Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[] }> {
+  options?: { skipKind0?: boolean; policies?: PolicyPreferences; benchmarkHashesPerMinute?: number },
+): Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[]; certEvent?: NostrEvent; policyEvent?: NostrEvent }> {
   const secretKey = decodeNsec(account.nsec)
   const errors: string[] = []
-  const results: { certificateEventId?: string; profileEventId?: string; errors: string[] } = { errors }
+  const results: { certificateEventId?: string; profileEventId?: string; errors: string[]; certEvent?: NostrEvent; policyEvent?: NostrEvent } = { errors }
 
   const pool = new SimplePool()
 
@@ -144,6 +143,7 @@ async function publishProfileToRelays(
     const certResult = await publishEvent(pool, relays, certEvent, 'cert')
     if (certResult.ok) {
       results.certificateEventId = certEvent.id
+      results.certEvent = certEvent
     } else {
       errors.push('kind 30998 cert: failed on all relays')
       certResult.details.forEach((d) => {
@@ -151,12 +151,9 @@ async function publishProfileToRelays(
       })
     }
 
-    // Publish kind 30998 recipient policy event (d-tag "nv_recipient_profile")
-    const policyContent = JSON.stringify({
-      allow: [],
-      deny: [],
-      global_minimum: { leadingzeros: 0 },
-    })
+    // Publish kind 30998 recipient policy event (d-tag "nv_recipient_profile"),
+    // built from the identity's policy preferences (wizard sliders / Settings → Mail Policy)
+    const policyContent = buildRecipientPolicyJson(options?.policies, options?.benchmarkHashesPerMinute)
     const policyEvent = finalizeEvent(
       {
         kind: 30998,
@@ -170,7 +167,7 @@ async function publishProfileToRelays(
     console.log('[publish] Publishing kind 30998 policy:', policyEvent.id)
     const polResult = await publishEvent(pool, relays, policyEvent, 'policy')
     if (polResult.ok) {
-      // no separate id field for policy, but track success
+      results.policyEvent = policyEvent
     } else {
       errors.push('kind 30998 policy: failed on all relays')
       polResult.details.forEach((d) => {
@@ -225,7 +222,23 @@ export function registerSendHandlers(): void {
     if (!account) throw new Error('Account not found')
 
     const relays = getRelaysFromSettings(session.payload.settings.preferences ?? {})
-    const result = await publishProfileToRelays(account, relays, options)
+    const prefs = (session.payload.settings.preferences ?? {}) as Record<string, unknown>
+    const hpm = getBenchmarkHashesPerMinute()
+    const result = await publishProfileToRelays(account, relays, {
+      ...options,
+      policies: prefs.policies as PolicyPreferences | undefined,
+      benchmarkHashesPerMinute: hpm,
+    })
+    // Publish goes through a raw SimplePool, so write the fresh events into the
+    // profile cache ourselves — otherwise scans/sends keep seeing the old policy
+    // until the cache TTL expires.
+    const db = getDb(identityId)
+    const now = Date.now()
+    for (const ev of [result.certEvent, result.policyEvent]) {
+      if (!ev) continue
+      const dTag = ev.tags.find((t) => t[0] === 'd')?.[1]
+      if (dTag) dao.setProfileCache(db, { pubkey: ev.pubkey, dTag, eventJson: JSON.stringify(ev), fetchedAt: now })
+    }
     if (!result.certificateEventId && !result.profileEventId) {
       throw new Error('Failed to publish on all relays:\n' + result.errors.join('\n'))
     }
@@ -252,165 +265,6 @@ export function registerSendHandlers(): void {
       pool.close(relayList)
     }
   })
-
-  ipcMain.handle(
-    'send:direct',
-    async (
-      _event,
-      identityId: string,
-      accountId: string,
-      payload: {
-        recipientNpub: string
-        subject: string
-        body: string
-        format: 'plaintext' | 'markdown' | 'html'
-        links?: string[]
-        threadId?: string
-      },
-    ) => {
-      const session = getUnlockedSession(identityId)
-      if (!session) throw new Error('Identity is locked')
-
-      const account = session.payload.accounts.find((a) => a.pubkey === accountId)
-      if (!account) throw new Error('Account not found')
-
-      const secretKey = decodeNsec(account.nsec)
-      const derivedPubkey = getPublicKey(secretKey)
-      if (derivedPubkey !== account.pubkey) {
-        throw new Error(
-          `Account key mismatch: stored pubkey ${account.pubkey} does not match nsec-derived pubkey ${derivedPubkey}. ` +
-          `This account was likely created with an older buggy version. Please create a new identity/account.`
-        )
-      }
-
-      const recipientHex = npubToHex(payload.recipientNpub)
-      const signer = new NsecSigner(secretKey)
-      const relays = getRelaysFromSettings(session.payload.settings.preferences ?? {})
-      const transport = new CachingTransport(
-        new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 15000 }),
-        getDb(identityId),
-      )
-
-      // Debug: query for recipient certificate before sending (uses same filter as nvelope-core)
-      try {
-        const filter = {
-          kinds: [30998 as number],
-          authors: [recipientHex],
-          '#d': ['nv_public_key'],
-        }
-        const events = await transport.query(filter, relays)
-        console.log('[send:direct] certificate query returned', events.length, 'events for', recipientHex)
-        if (events.length > 0) {
-          console.log('[send:direct] first event:', { id: events[0]!.id, pubkey: events[0]!.pubkey, tags: events[0]!.tags })
-        }
-      } catch (certErr) {
-        console.error('[send:direct] certificate query error:', certErr)
-      }
-
-      const client = new NvelopeClient({
-        transport,
-        signer,
-        relays,
-        certificatePrivateKeyPem: account.certificatePrivateKeyPem,
-        certificatePublicKeyDerBase64: account.certificatePublicKeyDerBase64,
-      })
-
-      const message = new DirectMessage()
-        .setFrom(account.pubkey)
-        .addRecipientTo(recipientHex)
-        .setSubject(payload.subject)
-
-      switch (payload.format) {
-        case 'html':
-          message.setHtml(payload.body)
-          break
-        case 'markdown':
-          message.setMarkdown(payload.body)
-          break
-        default:
-          message.setPlaintext(payload.body)
-      }
-
-      const links = payload.links?.length ? validateLinks(payload.links) : []
-      for (const link of links) {
-        message.addExternalReference('http', link)
-      }
-
-      // SPEC §3.1: thread_id is an opaque random key chosen by the thread
-      // originator and propagated unchanged by replies.
-      const threadId = payload.threadId ?? randomBytes(16).toString('hex')
-      message.setThreadId(threadId)
-
-      console.log('[send:direct] Composer payload body length:', payload.body?.length ?? 0)
-      console.log('[send:direct] Message contentWire before send:', JSON.stringify(message.contentModel.toWire()))
-      console.log('[send:direct] Message formats:', JSON.stringify(message.getContentFormats()))
-
-      const results = await client.sendDirectMail(message, {
-        onProgress: (attempts: number) => {
-          if (mainWindow) {
-            mainWindow.webContents.send('send:progress', {
-              identityId,
-              accountId,
-              recipientNpub: payload.recipientNpub,
-              attempts,
-            })
-          }
-        },
-      })
-
-      // Log publish results for each recipient
-      for (const r of results) {
-        const accepted = r.published.accepted
-        const rejected = r.published.rejected
-        console.log(`[send:direct] Publish result for ${r.recipient}: accepted=${accepted.length} (${accepted.join(', ')}) rejected=${rejected.length}`)
-        for (const rej of rejected) {
-          console.log(`[send:direct]   Rejected by ${rej.relay}: ${rej.message}`)
-        }
-      }
-
-      transport.close()
-
-      // Store sent mail
-      const db = getDb(identityId)
-      const sentFolder = dao.getSpecialFolder(db, accountId, 'sent')
-      const sentFolderId = sentFolder?.id ?? null
-
-      const innerEventId = results[0]?.event.id ?? `sent-${Date.now()}`
-      const messageData = JSON.stringify({
-        mailFrom: account.pubkey,
-        mailToList: [recipientHex],
-        subjectLine: payload.subject,
-        messageType: 0,
-        formats: {
-          [payload.format]: payload.body,
-        },
-        externalReferences: links.map((link) => ['http', link]),
-        hasAttachments: links.length > 0,
-      })
-
-      dao.insertMail(db, {
-        innerEventId,
-        accountId,
-        folderId: sentFolderId,
-        state: 'published',
-        senderPubkey: account.pubkey,
-        recipientPubkey: recipientHex,
-        subject: payload.subject || null,
-        threadId,
-        isBroadcast: 0,
-        createdAt: Math.floor(Date.now() / 1000),
-        read: 1,
-        marked: 0,
-        messageData,
-      })
-
-      return results.map((r) => ({
-        recipient: r.recipient,
-        eventId: r.event.id,
-        published: r.published,
-      }))
-    },
-  )
 
   ipcMain.handle(
     'draft:save',

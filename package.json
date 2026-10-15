@@ -1,7 +1,7 @@
 {
   "name": "nvelope-client",
-  "version": "0.1.0",
-  "description": "nVelope — Nostr-Mail desktop client",
+  "version": "0.1.0-beta.1",
+  "description": "nVelope (Beta) — Nostr-Mail desktop client",
   "author": "Steven Day",
   "license": "MIT",
   "main": "./out/main/index.js",
@@ -33,8 +33,9 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.0.0",
-    "nvelope-core": "^1.1.1",
+    "dompurify": "^3.4.17",
     "nostr-tools": "^2.19.4",
+    "nvelope-core": "^1.1.1",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },

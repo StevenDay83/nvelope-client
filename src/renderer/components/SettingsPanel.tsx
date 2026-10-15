@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { npubEncode } from 'nostr-tools/nip19'
+import { npubEncode, nsecEncode, decode } from 'nostr-tools/nip19'
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 
 interface AccountData {
   pubkey: string
@@ -17,9 +18,10 @@ interface Props {
   accounts: AccountData[]
   onClose: () => void
   onRenamed: (name: string) => void
+  onAccountsChanged?: (accounts: AccountData[]) => void
 }
 
-type Section = 'identity' | 'relays' | 'appearance' | 'security' | 'backup'
+type Section = 'identity' | 'relays' | 'policy' | 'appearance' | 'security' | 'backup'
 
 const DEFAULT_RELAYS = [
   'wss://relay.damus.io',
@@ -34,7 +36,7 @@ function formatNpub(pubkeyHex: string): string {
   return npub.slice(0, 15) + '...' + npub.slice(-10)
 }
 
-export default function SettingsPanel({ identityId, identityName, accounts, onClose, onRenamed }: Props) {
+export default function SettingsPanel({ identityId, identityName, accounts, onClose, onRenamed, onAccountsChanged }: Props) {
   const [section, setSection] = useState<Section>('identity')
 
   // Identity section
@@ -64,6 +66,28 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
   // Mail profile publishing (per account)
   const [publishingAccount, setPublishingAccount] = useState<string | null>(null)
   const [publishStatus, setPublishStatus] = useState<Record<string, string>>({})
+
+  // Mail policy section
+  const [contactsMinutes, setContactsMinutes] = useState(0)
+  const [nonContactsMinutes, setNonContactsMinutes] = useState(0)
+  const [denyUntrusted, setDenyUntrusted] = useState(false)
+  const [benchmarkHpm, setBenchmarkHpm] = useState<number | undefined>(undefined)
+  const [policyStatus, setPolicyStatus] = useState('')
+  const [policySaving, setPolicySaving] = useState(false)
+  const [benchmarking, setBenchmarking] = useState(false)
+
+  // Account add/remove
+  const [addingAccount, setAddingAccount] = useState(false)
+  const [newNsec, setNewNsec] = useState('')
+  const [newAccountName, setNewAccountName] = useState('')
+  const [accountStatus, setAccountStatus] = useState('')
+  const [accountError, setAccountError] = useState(false)
+  const [accountBusy, setAccountBusy] = useState(false)
+
+  const policyBits = (minutes: number): string => {
+    if (minutes <= 0 || !benchmarkHpm || benchmarkHpm <= 0) return 'no PoW required'
+    return `≈ ${Math.round(Math.log2(minutes * benchmarkHpm))} bits PoW`
+  }
 
   const handlePublishProfile = async (account: AccountData) => {
     setPublishingAccount(account.pubkey)
@@ -96,9 +120,23 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
         setAllPrefs(prefs)
         const r = prefs.relays
         setRelays(Array.isArray(r) && r.length > 0 ? (r as string[]) : [...DEFAULT_RELAYS])
+        const policies = (prefs.policies ?? {}) as { contactsMinutes?: number; nonContactsMinutes?: number; denyUntrusted?: boolean }
+        setContactsMinutes(policies.contactsMinutes ?? 0)
+        setNonContactsMinutes(policies.nonContactsMinutes ?? 0)
+        setDenyUntrusted(policies.denyUntrusted === true)
       } catch (e) {
         console.error('[settings] failed to load vault settings:', e)
         setRelays([...DEFAULT_RELAYS])
+      }
+      // Hash rate is machine-level (client settings), shared across identities
+      try {
+        const [hpm, version] = await Promise.all([
+          window.nvelope.settings.get('benchmarkHashesPerMinute'),
+          window.nvelope.settings.get('benchmarkVersion'),
+        ])
+        if (typeof hpm === 'number' && hpm > 0 && version === 2) setBenchmarkHpm(hpm)
+      } catch (e) {
+        console.error('[settings] failed to load benchmark:', e)
       }
       const t = await window.nvelope.settings.get('theme')
       if (t === 'light' || t === 'dark' || t === 'system') setTheme(t)
@@ -177,6 +215,119 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     setTimeout(() => setRelayStatus(''), 5000)
   }
 
+  const handleSavePolicy = async () => {
+    setPolicySaving(true)
+    try {
+      const settings = await window.nvelope.vault.getSettings(identityId)
+      await window.nvelope.vault.updateSettings(identityId, {
+        ...settings,
+        preferences: {
+          ...allPrefs,
+          policies: { contactsMinutes, nonContactsMinutes, denyUntrusted },
+        },
+      })
+      // Re-publish every account's certificate so the new policy takes effect
+      let published = 0
+      for (const account of accounts) {
+        const result = await window.nvelope.profile.publish(identityId, account.pubkey)
+        if (result.certificateEventId) published++
+      }
+      setPolicyStatus(`Policy saved — re-published ${published}/${accounts.length} account profile${accounts.length === 1 ? '' : 's'}`)
+    } catch (e) {
+      const msg = String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, '')
+      setPolicyStatus('Save failed: ' + (msg.split('\n')[0] ?? msg))
+    } finally {
+      setPolicySaving(false)
+      setTimeout(() => setPolicyStatus(''), 8000)
+    }
+  }
+
+  const handleRerunBenchmark = async () => {
+    setBenchmarking(true)
+    setPolicyStatus('')
+    try {
+      const result = await window.nvelope.benchmark.runPowBenchmark()
+      await window.nvelope.settings.set('benchmarkHashesPerMinute', result.hashesPerMinute)
+      await window.nvelope.settings.set('benchmarkVersion', 2)
+      setBenchmarkHpm(result.hashesPerMinute)
+      setPolicyStatus(`Benchmark updated: ${result.hashesPerSecond.toLocaleString()} hashes/sec — re-save the policy to apply it`)
+    } catch (e) {
+      setPolicyStatus('Benchmark failed: ' + String(e))
+    } finally {
+      setBenchmarking(false)
+      setTimeout(() => setPolicyStatus(''), 10000)
+    }
+  }
+
+  const refreshAccounts = async () => {
+    const list = (await window.nvelope.vault.listAccounts(identityId)) as AccountData[]
+    onAccountsChanged?.(list)
+  }
+
+  const handleAddAccount = async (mode: 'import' | 'generate') => {
+    setAccountBusy(true)
+    setAccountError(false)
+    try {
+      let nsec: string
+      if (mode === 'import') {
+        const trimmed = newNsec.trim()
+        const decoded = decode(trimmed)
+        if (decoded.type !== 'nsec') throw new Error('Expected an nsec1… secret key')
+        nsec = trimmed
+      } else {
+        nsec = nsecEncode(generateSecretKey())
+      }
+      const sk = decode(nsec).data as Uint8Array
+      const pubkey = getPublicKey(sk)
+      if (accounts.some((a) => a.pubkey === pubkey)) throw new Error('That account is already in this identity')
+      const cert = await window.nvelope.cert.generate(2048)
+      await window.nvelope.vault.addAccount(identityId, {
+        pubkey,
+        nsec,
+        certificatePrivateKeyPem: cert.privateKeyPem,
+        certificatePublicKeyDerBase64: cert.publicKeyDerBase64,
+        displayName: newAccountName.trim() || undefined,
+      })
+      await refreshAccounts()
+      setAddingAccount(false)
+      setNewNsec('')
+      setNewAccountName('')
+      setAccountStatus(mode === 'import' ? 'Account imported' : 'Account generated — export the nsec from Backup to keep a copy')
+      setAccountError(false)
+    } catch (e) {
+      const msg = String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, '')
+      setAccountStatus(msg.split('\n')[0] ?? msg)
+      setAccountError(true)
+    } finally {
+      setAccountBusy(false)
+      setTimeout(() => { setAccountStatus(''); setAccountError(false) }, 8000)
+    }
+  }
+
+  const handleRemoveAccount = async (account: AccountData) => {
+    if (accounts.length <= 1) {
+      setAccountStatus('Cannot remove the last account in an identity')
+      setAccountError(true)
+      setTimeout(() => { setAccountStatus(''); setAccountError(false) }, 5000)
+      return
+    }
+    const label = account.displayName || formatNpub(account.pubkey)
+    if (!confirm(`Remove account ${label} from this identity? Its stored mail stays on disk, but the account will no longer be usable here.`)) return
+    setAccountBusy(true)
+    try {
+      await window.nvelope.vault.deleteAccount(identityId, account.pubkey)
+      await refreshAccounts()
+      setAccountStatus('Account removed')
+      setAccountError(false)
+    } catch (e) {
+      setAccountStatus('Remove failed: ' + String(e))
+      setAccountError(true)
+    } finally {
+      setAccountBusy(false)
+      setTimeout(() => { setAccountStatus(''); setAccountError(false) }, 5000)
+    }
+  }
+
   const handleThemeChange = async (value: 'dark' | 'light' | 'system') => {
     setTheme(value)
     await window.nvelope.settings.set('theme', value)
@@ -216,6 +367,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
   const sections: Array<{ id: Section; label: string }> = [
     { id: 'identity', label: 'Identity' },
     { id: 'relays', label: 'Relays' },
+    { id: 'policy', label: 'Mail Policy' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
     { id: 'backup', label: 'Backup' },
@@ -332,17 +484,74 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                             </span>
                           )}
                         </div>
-                        <button
-                          onClick={() => handlePublishProfile(a)}
-                          disabled={publishingAccount === a.pubkey}
-                          title="Publish mail certificate + recipient policy (kind 30998) to your relays"
-                          className="shrink-0 rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-xs hover:bg-neutral-700 disabled:opacity-50 transition-colors"
-                        >
-                          {publishingAccount === a.pubkey ? 'Publishing…' : 'Publish profile'}
-                        </button>
+                        <div className="flex shrink-0 gap-1.5">
+                          <button
+                            onClick={() => handlePublishProfile(a)}
+                            disabled={publishingAccount === a.pubkey}
+                            title="Publish mail certificate + recipient policy (kind 30998) to your relays"
+                            className="rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-xs hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                          >
+                            {publishingAccount === a.pubkey ? 'Publishing…' : 'Publish profile'}
+                          </button>
+                          <button
+                            onClick={() => handleRemoveAccount(a)}
+                            disabled={accountBusy || accounts.length <= 1}
+                            title={accounts.length <= 1 ? 'Cannot remove the last account' : 'Remove this account from the identity'}
+                            className="rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-xs text-neutral-400 hover:text-red-400 hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
+                  {addingAccount ? (
+                    <div className="mt-2 space-y-2 rounded-md border border-neutral-700/50 bg-neutral-800/50 p-3">
+                      <input
+                        type="text"
+                        placeholder="Display name (optional)"
+                        value={newAccountName}
+                        onChange={(e) => setNewAccountName(e.target.value)}
+                        className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+                      />
+                      <input
+                        type="password"
+                        placeholder="nsec1… (leave empty to generate a new key)"
+                        value={newNsec}
+                        onChange={(e) => setNewNsec(e.target.value)}
+                        className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => (newNsec.trim() ? handleAddAccount('import') : handleAddAccount('generate'))}
+                          disabled={accountBusy}
+                          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                        >
+                          {accountBusy ? 'Adding…' : newNsec.trim() ? 'Import account' : 'Generate account'}
+                        </button>
+                        <button
+                          onClick={() => { setAddingAccount(false); setNewNsec(''); setNewAccountName('') }}
+                          disabled={accountBusy}
+                          className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <p className="text-xs text-neutral-500">
+                        A fresh 2048-bit mail certificate is generated for the account. Publish its profile to make it reachable.
+                      </p>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setAddingAccount(true)}
+                      className="mt-2 rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 transition-colors"
+                    >
+                      Add account…
+                    </button>
+                  )}
+                  {accountStatus && (
+                    <p className={`mt-1.5 text-xs ${accountError ? 'text-red-400' : 'text-emerald-400'}`}>{accountStatus}</p>
+                  )}
                   <p className="mt-1.5 text-xs text-neutral-500">
                     Publishing makes the account reachable — contacts can only send mail to accounts with a published certificate.
                   </p>
@@ -401,6 +610,84 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                   </button>
                 </div>
                 {relayStatus && <p className="text-xs text-emerald-400">{relayStatus}</p>}
+              </div>
+            )}
+
+            {section === 'policy' && (
+              <div className="space-y-5">
+                <p className="text-xs text-neutral-500">
+                  Sets the proof-of-work you require from senders before you accept their mail. Saving re-publishes every account's mail certificate (kind 30998) with the new policy.
+                </p>
+                <div>
+                  <div className="flex justify-between text-sm mb-2">
+                    <span>Contacts (People I know)</span>
+                    <span className="text-neutral-400">{contactsMinutes} Minutes</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={60}
+                    value={contactsMinutes}
+                    onChange={(e) => setContactsMinutes(parseInt(e.target.value))}
+                    className="w-full accent-blue-500"
+                  />
+                  <div className="flex justify-between text-xs text-neutral-500 mt-1">
+                    <span>0 Minutes</span>
+                    <span>{policyBits(contactsMinutes)}</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-2">
+                    <span>Non-Contacts (People I may not know)</span>
+                    <span className="text-neutral-400">{nonContactsMinutes} Minutes</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={60}
+                    value={nonContactsMinutes}
+                    onChange={(e) => setNonContactsMinutes(parseInt(e.target.value))}
+                    className="w-full accent-blue-500"
+                  />
+                  <div className="flex justify-between text-xs text-neutral-500 mt-1">
+                    <span>0 Minutes</span>
+                    <span>{policyBits(nonContactsMinutes)}</span>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2.5 rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-2 text-sm cursor-pointer hover:bg-neutral-800">
+                  <input
+                    type="checkbox"
+                    checked={denyUntrusted}
+                    onChange={(e) => setDenyUntrusted(e.target.checked)}
+                    className="accent-blue-500"
+                  />
+                  <span>Reject mail from non-contacts</span>
+                </label>
+                {benchmarkHpm ? (
+                  <p className="text-xs text-neutral-500">
+                    Measured hash rate: ~{Math.round(benchmarkHpm / 60).toLocaleString()} hashes/sec
+                  </p>
+                ) : (
+                  <p className="text-xs text-amber-400/90">
+                    No hash-rate benchmark recorded for this identity — PoW difficulty is estimated from the benchmark run during setup, so minute targets are approximate.
+                  </p>
+                )}
+                <button
+                  onClick={handleRerunBenchmark}
+                  disabled={benchmarking || policySaving}
+                  title="Measure this machine's hash rate again (10 seconds). Re-save the policy afterwards to apply it."
+                  className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                >
+                  {benchmarking ? 'Benchmarking (10s)…' : 'Re-run benchmark'}
+                </button>
+                <button
+                  onClick={handleSavePolicy}
+                  disabled={policySaving}
+                  className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                >
+                  {policySaving ? 'Saving & publishing…' : 'Save policy'}
+                </button>
+                {policyStatus && <p className="text-xs text-emerald-400">{policyStatus}</p>}
               </div>
             )}
 

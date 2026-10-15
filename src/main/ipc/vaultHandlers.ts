@@ -224,6 +224,12 @@ export function registerVaultHandlers(): void {
     return session.payload.settings
   })
 
+  ipcMain.handle('vault:listAccounts', async (_event, identityId: string) => {
+    const session = unlockedSessions.get(identityId)
+    if (!session) throw new Error('Identity is locked')
+    return session.payload.accounts
+  })
+
   ipcMain.handle('vault:exportVault', async (_event, identityId: string) => {
     if (!unlockedSessions.has(identityId)) throw new Error('Identity is locked')
     const vaultPath = path.join(VAULT_DIR, `${identityId}.vault`)

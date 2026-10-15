@@ -8,7 +8,9 @@ import {
   type ScannedDirectMail,
   type ScannedBroadcast,
 } from 'nvelope-core'
+import { getUnlockedSession, persistUnlockedSession } from '../ipc/vaultHandlers'
 import type { VaultPayload } from '../ipc/vaultHandlers'
+import { recoverOutbox } from '../outbox/processor'
 import { getDb } from '../ipc/dbHandlers'
 import { CachingTransport } from './cachingTransport'
 import * as dao from '../db/dao'
@@ -199,8 +201,14 @@ async function scanIdentity(
         console.error('[scanner] Raw query error:', e)
       }
 
-      // Direct mail
-      const directResult = await client.checkDirectInbox({ since })
+      // Direct mail. isContact comes from our address book — without it every
+      // sender is evaluated as untrusted (contacts PoW never applies, and
+      // "reject non-contacts" would wrongly reject contacts).
+      const db = getDb(identityId)
+      const directResult = await client.checkDirectInbox({
+        since,
+        isContact: (pubkey: string) => dao.getContact(db, account.pubkey, pubkey) !== null,
+      })
       console.log(`[scanner] Direct scan result: ${directResult.inbox.length} inbox, ${directResult.rejected.length} rejected`)
       for (const rej of directResult.rejected) {
         console.log(`[scanner]   Rejected: sender=${rej.senderPubkey.slice(0, 16)}... reason=${rej.reason}${rej.requiredTarget ? ' target=' + rej.requiredTarget : ''}`)
@@ -222,7 +230,6 @@ async function scanIdentity(
       }
 
       // Verify rows are in DB
-      const db = getDb(identityId)
       const count = db.prepare('SELECT COUNT(*) as c FROM mail WHERE accountId = ?').get(account.pubkey) as { c: number }
       console.log(`[scanner] DB verify: ${count.c} total mail rows for account ${account.pubkey.slice(0, 16)}...`)
 
@@ -258,7 +265,6 @@ async function scanIdentity(
 
   // Persist lastRetrievedPerAccount so the next scan (even after a restart)
   // only fetches envelopes newer than this one
-  const { persistUnlockedSession } = await import('../ipc/vaultHandlers')
   persistUnlockedSession(identityId)
 
   const totalNew = directCount + broadcastCount
@@ -286,7 +292,6 @@ export async function manualScan(
   identityId: string,
   mainWindow: Electron.BrowserWindow | null,
 ): Promise<{ direct: number; broadcast: number; errors: string[] }> {
-  const { getUnlockedSession } = await import('../ipc/vaultHandlers')
   const session = getUnlockedSession(identityId)
   if (!session) {
     throw new Error('Identity is locked')
@@ -300,8 +305,10 @@ export function startAutoScan(
 ): void {
   if (scanStates.has(identityId)) return // already running
 
+  // Un-stick sends interrupted by an app quit and resume the outbox queue
+  recoverOutbox(identityId)
+
   const intervalId = setInterval(async () => {
-    const { getUnlockedSession } = await import('../ipc/vaultHandlers')
     const session = getUnlockedSession(identityId)
     if (!session) {
       stopAutoScan(identityId)

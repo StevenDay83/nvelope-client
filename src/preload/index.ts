@@ -27,6 +27,7 @@ export interface VaultAPI {
   renameIdentity: (identityId: string, name: string) => Promise<{ id: string; name: string }>
   changePassphrase: (identityId: string, currentPassphrase: string, newPassphrase: string) => Promise<void>
   getSettings: (identityId: string) => Promise<IdentitySettings>
+  listAccounts: (identityId: string) => Promise<AccountData[]>
   exportVault: (identityId: string) => Promise<{ canceled: boolean; path?: string }>
 }
 
@@ -102,18 +103,20 @@ export interface SettingsAPI {
 }
 
 export interface SendAPI {
-  direct: (
+  queue: (
     identityId: string,
     accountId: string,
     payload: {
-      recipientNpub: string
+      recipients: string[]
       subject: string
       body: string
       format: 'plaintext' | 'markdown' | 'html'
       links?: string[]
       threadId?: string
     },
-  ) => Promise<Array<{ recipient: string; eventId: string; published: unknown }>>
+  ) => Promise<{ innerEventId: string }>
+  cancel: (identityId: string, innerEventId: string) => Promise<void>
+  retry: (identityId: string, innerEventId: string) => Promise<void>
   saveDraft: (
     identityId: string,
     accountId: string,
@@ -125,6 +128,23 @@ export interface SendAPI {
       format?: 'plaintext' | 'markdown' | 'html'
     },
   ) => Promise<{ draftId: string }>
+}
+
+export interface OutboxProgress {
+  identityId: string
+  accountId: string
+  innerEventId: string
+  phase: 'queued' | 'mining' | 'sent' | 'cancelled' | 'error'
+  recipientIndex?: number
+  recipientCount?: number
+  attempts?: number
+  bits?: number
+  etaMinutes?: number | null
+  error?: string
+}
+
+export interface OutboxAPI {
+  onProgress: (callback: (data: OutboxProgress) => void) => () => void
 }
 
 export interface ProfileAPI {
@@ -149,15 +169,7 @@ export interface ContactsListenerAPI {
   onPrefill: (callback: (data: Record<string, unknown>) => void) => () => void
   sync: (identityId: string) => Promise<{ contacts: number; mailEnabled: number }>
   checkCert: (identityId: string, accountId: string, pubkey: string) => Promise<{ mailEnabled: boolean }>
-}
-
-export interface SendProgressAPI {
-  onProgress: (callback: (data: {
-    identityId: string
-    accountId: string
-    recipientNpub: string
-    attempts: number
-  }) => void) => () => void
+  policyEta: (identityId: string, accountId: string, pubkey: string) => Promise<{ bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean; reason?: string }>
 }
 
 export interface AccountData {
@@ -188,6 +200,7 @@ const vaultAPI: VaultAPI = {
   renameIdentity: (identityId, name) => ipcRenderer.invoke('vault:renameIdentity', identityId, name),
   changePassphrase: (identityId, currentPassphrase, newPassphrase) => ipcRenderer.invoke('vault:changePassphrase', identityId, currentPassphrase, newPassphrase),
   getSettings: (identityId) => ipcRenderer.invoke('vault:getSettings', identityId),
+  listAccounts: (identityId) => ipcRenderer.invoke('vault:listAccounts', identityId),
   exportVault: (identityId) => ipcRenderer.invoke('vault:exportVault', identityId),
 }
 
@@ -256,15 +269,17 @@ const settingsAPI: SettingsAPI = {
 }
 
 const sendAPI: SendAPI = {
-  direct: (identityId, accountId, payload) => ipcRenderer.invoke('send:direct', identityId, accountId, payload),
+  queue: (identityId, accountId, payload) => ipcRenderer.invoke('send:queue', identityId, accountId, payload),
+  cancel: (identityId, innerEventId) => ipcRenderer.invoke('send:cancel', identityId, innerEventId),
+  retry: (identityId, innerEventId) => ipcRenderer.invoke('send:retry', identityId, innerEventId),
   saveDraft: (identityId, accountId, draftId, payload) => ipcRenderer.invoke('draft:save', identityId, accountId, draftId, payload),
 }
 
-const sendProgressAPI: SendProgressAPI = {
+const outboxAPI: OutboxAPI = {
   onProgress: (callback) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { identityId: string; accountId: string; recipientNpub: string; attempts: number }) => callback(data)
-    ipcRenderer.on('send:progress', handler)
-    return () => ipcRenderer.removeListener('send:progress', handler)
+    const handler = (_event: Electron.IpcRendererEvent, data: OutboxProgress) => callback(data)
+    ipcRenderer.on('outbox:progress', handler)
+    return () => ipcRenderer.removeListener('outbox:progress', handler)
   },
 }
 
@@ -298,11 +313,12 @@ const contactsListenerAPI: ContactsListenerAPI = {
   },
   sync: (identityId) => ipcRenderer.invoke('contacts:sync', identityId),
   checkCert: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:checkCert', identityId, accountId, pubkey),
+  policyEta: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:policyEta', identityId, accountId, pubkey),
 }
 
-contextBridge.exposeInMainWorld('nvelope', { vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, mail: mailListenerAPI, settings: settingsAPI, send: sendAPI, sendProgress: sendProgressAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
+contextBridge.exposeInMainWorld('nvelope', { vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, mail: mailListenerAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
 
-export type NvelopeAPI = { vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; mail: MailListenerAPI; settings: SettingsAPI; send: SendAPI; sendProgress: SendProgressAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
+export type NvelopeAPI = { vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; mail: MailListenerAPI; settings: SettingsAPI; send: SendAPI; outbox: OutboxAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
 
 declare global {
   interface Window {

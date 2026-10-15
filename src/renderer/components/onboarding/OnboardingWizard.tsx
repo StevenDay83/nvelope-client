@@ -183,11 +183,15 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
   const [importInput, setImportInput] = useState('')
   const [importPreview, setImportPreview] = useState<{ pubkey: string; name?: string; picture?: string; about?: string } | null>(null)
 
-  // Load benchmark from general client settings on mount
+  // Load benchmark from general client settings on mount (v2 = hash-only algorithm;
+  // older benchmarks measured sign+hash and read ~60x too slow — treat as absent)
   useEffect(() => {
-    window.nvelope.settings.get('benchmarkHashesPerMinute').then((value) => {
+    Promise.all([
+      window.nvelope.settings.get('benchmarkHashesPerMinute'),
+      window.nvelope.settings.get('benchmarkVersion'),
+    ]).then(([value, version]) => {
       const hpm = typeof value === 'number' ? value : 0
-      if (hpm > 0) {
+      if (hpm > 0 && version === 2) {
         setData((d) => ({ ...d, benchmarkHpm: hpm }))
       }
       setStoredBenchmarkLoaded(true)
@@ -208,6 +212,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
     try {
       const result = await window.nvelope.benchmark.runPowBenchmark()
       await window.nvelope.settings.set('benchmarkHashesPerMinute', result.hashesPerMinute)
+      await window.nvelope.settings.set('benchmarkVersion', 2)
       update('benchmarkHpm', result.hashesPerMinute)
     } catch (e) {
       setError('Benchmark failed: ' + String(e))
@@ -386,7 +391,6 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       await window.nvelope.vault.addAccount(identity.id, account)
       console.log('[wizard] Account added to vault')
       await window.nvelope.vault.updateSettings(identity.id, {
-        benchmarkHashesPerMinute: data.benchmarkHpm,
         preferences: {
           relays: data.relays,
           policies: data.policies,

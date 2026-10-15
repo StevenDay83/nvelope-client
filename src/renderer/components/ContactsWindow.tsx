@@ -22,6 +22,28 @@ export default function ContactsWindow({ data }: Props) {
   const [editing, setEditing] = useState<ContactRecord | 'new' | null>(null)
   const [status, setStatus] = useState('')
   const [syncing, setSyncing] = useState(false)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [policyEtas, setPolicyEtas] = useState<Record<string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean }>>({})
+
+  const loadPolicyEtas = useCallback(async (list: ContactRecord[]) => {
+    const entries = await Promise.all(
+      list.filter((c) => c.isNostrMailEnabled).map(async (c) => {
+        try {
+          const eta = await window.nvelope.contacts.policyEta(identityId, accountId, c.pubkey)
+          return [c.pubkey, eta] as const
+        } catch {
+          return [c.pubkey, null] as const
+        }
+      }),
+    )
+    setPolicyEtas(Object.fromEntries(entries.filter(([, v]) => v !== null) as Array<readonly [string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean }]>))
+  }, [identityId, accountId])
+
+  const handleCopy = async (c: ContactRecord) => {
+    await navigator.clipboard.writeText(c.nip05 || npubEncode(c.pubkey))
+    setCopiedKey(c.pubkey)
+    setTimeout(() => setCopiedKey(null), 1500)
+  }
 
   const handleSync = async () => {
     setSyncing(true)
@@ -41,7 +63,8 @@ export default function ContactsWindow({ data }: Props) {
     if (!identityId || !accountId) return
     const list = (await window.nvelope.db.contactsGetAll(identityId, accountId)) as ContactRecord[]
     setContacts(list)
-  }, [identityId, accountId])
+    loadPolicyEtas(list)
+  }, [identityId, accountId, loadPolicyEtas])
 
   useEffect(() => {
     loadContacts()
@@ -153,14 +176,55 @@ export default function ContactsWindow({ data }: Props) {
                   </div>
                 </div>
                 {c.isNostrMailEnabled ? (
-                  <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400" title="Publishes a mail certificate (kind 30998) — can receive nVelope mail">
-                    Mail
-                  </span>
+                  <>
+                    <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400" title="Publishes a mail certificate (kind 30998) — can receive nVelope mail">
+                      Mail
+                    </span>
+                    {(() => {
+                      const eta = policyEtas[c.pubkey]
+                      if (!eta) return null
+                      if (eta.denied) {
+                        return (
+                          <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-400" title="This contact's recipient policy denies mail from your account">
+                            Blocked
+                          </span>
+                        )
+                      }
+                      if (eta.bits === 0) return null
+                      const label = eta.etaMinutes === null
+                        ? `PoW ~${eta.bits} bits`
+                        : eta.etaMinutes < 1
+                          ? '~<1 min'
+                          : eta.etaMinutes < 60
+                            ? `~${Math.round(eta.etaMinutes)} min`
+                            : `~${(eta.etaMinutes / 60).toFixed(1)} hrs`
+                      return (
+                        <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300" title={`This contact requires proof-of-work (≈${eta.bits} bits) — sending takes about ${label.replace('~', '')} on this machine${eta.hashesPerSecond ? ` at your measured ~${eta.hashesPerSecond.toLocaleString()} hashes/sec` : ''}`}>
+                          {label}
+                        </span>
+                      )
+                    })()}
+                  </>
                 ) : (
                   <span className="shrink-0 rounded bg-neutral-700/40 px-1.5 py-0.5 text-[10px] font-medium text-neutral-500" title="No mail certificate published — cannot receive nVelope mail">
                     No mail cert
                   </span>
                 )}
+                <button
+                  onClick={() => handleCopy(c)}
+                  title={`Copy ${c.nip05 ? 'NIP-05' : 'npub'} to clipboard`}
+                  className="shrink-0 rounded-md border border-neutral-600 bg-neutral-800 p-1.5 text-neutral-400 hover:text-blue-300 hover:bg-neutral-700 transition-colors"
+                >
+                  {copiedKey === c.pubkey ? (
+                    <svg className="h-3.5 w-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
                 <button
                   onClick={() => handleWrite(c)}
                   disabled={!c.isNostrMailEnabled}

@@ -145,6 +145,34 @@ export function deleteMail(db: Database.Database, innerEventId: string): void {
 }
 
 // ------------------------------------------------------------------
+// Outbox queue helpers
+// ------------------------------------------------------------------
+
+export function getQueuedMail(db: Database.Database, accountId: string): MailRecord[] {
+  const stmt = db.prepare("SELECT * FROM mail WHERE accountId = ? AND state = 'pending' ORDER BY createdAt ASC")
+  return stmt.all(accountId) as MailRecord[]
+}
+
+export function setMailState(db: Database.Database, innerEventId: string, state: MailRecord['state']): void {
+  db.prepare('UPDATE mail SET state = ? WHERE innerEventId = ?').run(state, innerEventId)
+}
+
+export function updateMailMessageData(db: Database.Database, innerEventId: string, messageData: string): void {
+  db.prepare('UPDATE mail SET messageData = ? WHERE innerEventId = ?').run(messageData, innerEventId)
+}
+
+/** Recovery: rows stuck in 'processing' when the app quit go back to the queue. */
+export function resetProcessingToPending(db: Database.Database): void {
+  db.prepare("UPDATE mail SET state = 'pending' WHERE state = 'processing'").run()
+}
+
+/** Move a queued row to Sent after successful publish. */
+export function markMailSent(db: Database.Database, innerEventId: string, sentFolderId: number | null, envelopeEventId: string): void {
+  db.prepare("UPDATE mail SET folderId = ?, state = 'published', envelopeEventId = ? WHERE innerEventId = ?")
+    .run(sentFolderId ?? null, envelopeEventId, innerEventId)
+}
+
+// ------------------------------------------------------------------
 // Folder DAO
 // ------------------------------------------------------------------
 

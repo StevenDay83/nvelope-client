@@ -95,12 +95,6 @@ export default function App() {
       setAccounts(data.accounts)
       await window.nvelope.db.initSchema(identityId)
 
-      // If this identity has a benchmark but general settings don't, sync it
-      const generalBenchmark = await window.nvelope.settings.get('benchmarkHashesPerMinute')
-      if (typeof generalBenchmark !== 'number' && data.settings.benchmarkHashesPerMinute) {
-        await window.nvelope.settings.set('benchmarkHashesPerMinute', data.settings.benchmarkHashesPerMinute)
-      }
-
       await window.nvelope.relay.startAutoScan(identityId)
       setLastIdentityId(identityId)
       await window.nvelope.settings.set('lastIdentityId', identityId)
@@ -183,6 +177,7 @@ export default function App() {
     <InboxView
       identityId={activeIdentity?.id ?? ''}
       accounts={accounts}
+      onAccountsChanged={setAccounts}
       onLock={handleLock}
       identityName={activeIdentity?.name ?? ''}
       onIdentityRenamed={handleIdentityRenamed}

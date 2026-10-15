@@ -1,9 +1,10 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { SimplePool } from 'nostr-tools'
 import type { Filter } from 'nostr-tools'
-import { NostrToolsTransport, type NostrEvent } from 'nvelope-core'
+import { NostrToolsTransport, type NostrEvent, fetchRecipientPolicy, difficultyFromTarget } from 'nvelope-core'
 import { getUnlockedSession } from './vaultHandlers'
 import { getDb } from './dbHandlers'
+import { getBenchmarkHashesPerMinute } from '../clientSettings'
 import { CachingTransport } from '../relay/cachingTransport'
 import * as dao from '../db/dao'
 
@@ -146,6 +147,35 @@ export function registerContactSyncHandlers(): void {
         win.webContents.send('contacts:changed', { identityId, accountId })
       }
       return { mailEnabled: enabled === 1 }
+    } finally {
+      transport.close()
+    }
+  })
+
+  // Estimated send cost to a contact: the recipient's policy evaluated the same
+  // way sendDirectMail evaluates it (sender as untrusted), against the
+  // identity's benchmarked hash rate. Cached via CachingTransport.
+  ipcMain.handle('contacts:policyEta', async (_event, identityId: string, accountId: string, pubkey: string) => {
+    const session = getUnlockedSession(identityId)
+    if (!session) throw new Error('Identity is locked')
+    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
+    const db = getDb(identityId)
+    const transport = new CachingTransport(
+      new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
+      db,
+    )
+    try {
+      const policy = await fetchRecipientPolicy(transport, pubkey, relays)
+      if (!policy) return { bits: 0, etaMinutes: null }
+      const decision = policy.evaluate(accountId, false)
+      if (!decision.allowed) return { denied: true as const, reason: decision.reason, bits: 0, etaMinutes: null }
+      const difficulty = difficultyFromTarget(decision.target)
+      if (difficulty <= 1n) return { bits: 0, etaMinutes: null }
+      const bits = difficulty.toString(2).length - 1
+      const hpm = getBenchmarkHashesPerMinute()
+      const hashesPerSecond = hpm ? Math.round(hpm / 60) : null
+      const etaMinutes = hashesPerSecond ? Number(difficulty) / (hashesPerSecond * 60) : null
+      return { bits, etaMinutes, hashesPerSecond }
     } finally {
       transport.close()
     }

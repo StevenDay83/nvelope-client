@@ -5,7 +5,9 @@ import * as dao from '../db/dao'
 
 /** Certificate/policy events change rarely — cache hits skip relay round trips. */
 const PROFILE_KIND = 30998
-const TTL_PRESENT_MS = 6 * 60 * 60 * 1000 // published cert/policy: 6h
+const POLICY_D_TAG = 'nv_recipient_profile'
+const TTL_PRESENT_MS = 6 * 60 * 60 * 1000 // published cert: 6h
+const TTL_POLICY_PRESENT_MS = 5 * 60 * 1000 // policies change when users tune PoW — keep fresh
 const TTL_ABSENT_MS = 30 * 60 * 1000 // "nothing published" answer: 30min
 
 interface ProfileFilterShape {
@@ -54,7 +56,9 @@ export class CachingTransport implements Transport {
       const rows = new Map(dao.getProfileCache(this.db, shape.dTag, shape.authors).map((r) => [r.pubkey, r]))
       for (const author of shape.authors) {
         const row = rows.get(author)
-        const ttl = row?.eventJson ? TTL_PRESENT_MS : TTL_ABSENT_MS
+        const ttl = row?.eventJson
+          ? shape.dTag === POLICY_D_TAG ? TTL_POLICY_PRESENT_MS : TTL_PRESENT_MS
+          : TTL_ABSENT_MS
         if (row && now - row.fetchedAt < ttl) {
           if (row.eventJson) served.push(JSON.parse(row.eventJson) as NostrEvent)
         } else {

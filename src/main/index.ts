@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { registerVaultHandlers } from './ipc/vaultHandlers'
@@ -8,7 +8,8 @@ import { registerCertHandlers } from './ipc/certHandlers'
 import { registerBenchmarkHandlers } from './ipc/benchmarkHandlers'
 import { registerRelayHandlers, setMainWindowForRelay } from './ipc/relayHandlers'
 import { registerSettingsHandlers } from './ipc/settingsHandlers'
-import { registerSendHandlers, setMainWindowForSend } from './ipc/sendHandlers'
+import { registerSendHandlers } from './ipc/sendHandlers'
+import { registerOutboxHandlers } from './outbox/processor'
 import { registerNip05Handlers } from './ipc/nip05Handlers'
 import { registerContactSyncHandlers } from './ipc/contactSyncHandlers'
 import { stopAllScans } from './relay/scanner'
@@ -40,6 +41,17 @@ let mainWindow: BrowserWindow | null = null
 const composeWindows = new Set<BrowserWindow>()
 let contactsWindow: BrowserWindow | null = null
 
+// External links (mail bodies, iframe popups) open in the system browser,
+// never in an Electron window. Everything else is denied.
+function guardExternalNavigation(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      void shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+}
+
 function getRendererUrl(): string {
   if (process.env['ELECTRON_RENDERER_URL']) {
     return process.env['ELECTRON_RENDERER_URL']
@@ -56,7 +68,7 @@ const createWindow = (): void => {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'nVelope',
+    title: 'nVelope Beta',
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -66,12 +78,11 @@ const createWindow = (): void => {
   })
 
   setMainWindowForRelay(mainWindow)
-  setMainWindowForSend(mainWindow)
+  guardExternalNavigation(mainWindow)
 
   mainWindow.on('closed', () => {
     mainWindow = null
     setMainWindowForRelay(null)
-    setMainWindowForSend(null)
   })
 
   mainWindow.loadURL(getRendererUrl())
@@ -101,6 +112,7 @@ function createComposeWindow(data: Record<string, unknown>): BrowserWindow {
   })
 
   composeWindows.add(win)
+  guardExternalNavigation(win)
   win.on('closed', () => {
     composeWindows.delete(win)
   })
@@ -135,6 +147,7 @@ function createContactsWindow(data: Record<string, unknown>): BrowserWindow {
   })
 
   contactsWindow = win
+  guardExternalNavigation(win)
   win.on('closed', () => {
     contactsWindow = null
   })
@@ -152,6 +165,7 @@ app.whenReady().then(() => {
   registerRelayHandlers()
   registerSettingsHandlers()
   registerSendHandlers()
+  registerOutboxHandlers()
   registerNip05Handlers()
   registerContactSyncHandlers()
 
