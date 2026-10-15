@@ -46,6 +46,7 @@
       "output": "release",
       "buildResources": "build"
     },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "files": [
       "out/**/*",
       "assets/**/*"
