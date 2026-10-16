@@ -383,15 +383,23 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     const acct = accounts.find((a) => a.pubkey === selectedAccount)
     const replySubject = mail.subject?.startsWith('Re:') ? mail.subject : `Re: ${mail.subject || '(no subject)'}`
     let replyBody = ''
+    let broadcastReplyTo: string | null = null
     try {
       const data = JSON.parse(mail.messageData)
       const originalBody = data.bodyText || ''
       replyBody = `\n\n--- On ${formatDateFull(mail.createdAt)}, ${getSenderDisplay(mail)} wrote ---\n${originalBody}`
+      if (mail.isBroadcast && typeof data.replyTo === 'string' && data.replyTo) {
+        broadcastReplyTo = data.replyTo
+      }
     } catch {
       replyBody = '\n\n--- Original message ---\n'
     }
-    // Replying to your own Sent message replies to the original recipient
-    const replyTargetHex = mail.senderPubkey === selectedAccount ? mail.recipientPubkey : mail.senderPubkey
+    // Replying to your own Sent message replies to the original recipient.
+    // Broadcast replies go to the message's replyTo address when present,
+    // otherwise to the author's signing pubkey.
+    const replyTargetHex = mail.isBroadcast
+      ? (broadcastReplyTo ?? mail.senderPubkey)
+      : mail.senderPubkey === selectedAccount ? mail.recipientPubkey : mail.senderPubkey
     window.nvelope.compose.open({
       identityId,
       accountId: selectedAccount,
@@ -858,7 +866,10 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                           </span>
                         )}
                         {mail.isBroadcast ? (
-                          <span className="rounded bg-purple-500/20 px-1 text-[10px] font-medium text-purple-300">BC</span>
+                          <svg className="h-3.5 w-3.5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <title>Broadcast</title>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+                          </svg>
                         ) : null}
                         <span className="text-xs text-neutral-500">{formatDate(mail.createdAt)}</span>
                       </div>
@@ -1110,7 +1121,12 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                         <div className="text-xs text-neutral-500 mt-0.5">
                           {formatDateFull(selectedMail.createdAt)}
                           {selectedMail.isBroadcast ? (
-                            <span className="ml-2 rounded bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-medium text-purple-300">Broadcast</span>
+                            <span className="ml-2 inline-flex items-center gap-1 rounded bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-medium text-purple-300">
+                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" />
+                              </svg>
+                              Broadcast
+                            </span>
                           ) : null}
                         </div>
                       </div>

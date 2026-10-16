@@ -16,12 +16,13 @@ import { CachingTransport } from './cachingTransport'
 import * as dao from '../db/dao'
 
 interface ScanState {
-  intervalId: ReturnType<typeof setInterval>
-  scanning: boolean
+  directIntervalId: ReturnType<typeof setInterval>
+  broadcastIntervalId: ReturnType<typeof setInterval>
 }
 
 const scanStates = new Map<string, ScanState>()
-const AUTO_SCAN_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+const AUTO_SCAN_INTERVAL_MS = 5 * 60 * 1000 // direct mail: 5 minutes
+const BROADCAST_SCAN_INTERVAL_MS = 15 * 60 * 1000 // broadcast: 15 minutes (different relays, slower retrieval)
 
 function decodeNsec(nsec: string): Uint8Array {
   const result = decode(nsec)
@@ -45,6 +46,14 @@ function getSinceForAccount(settings: VaultPayload['settings'], pubkey: string):
   const lastRetrieved = settings.lastRetrievedPerAccount?.[pubkey]
   if (lastRetrieved) return lastRetrieved
   // Default: 7 days ago to avoid fetching too much history on first scan
+  return Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
+}
+
+// Broadcast runs on its own schedule, so it needs its own cursor — sharing the
+// direct cursor would skip broadcast events that arrive between direct scans.
+function getBroadcastSinceForAccount(settings: VaultPayload['settings'], pubkey: string): number | undefined {
+  const lastRetrieved = settings.lastBroadcastRetrievedPerAccount?.[pubkey]
+  if (lastRetrieved) return lastRetrieved
   return Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
 }
 
@@ -72,12 +81,21 @@ async function storeDirectMail(
   const externalReferences = msg.getExternalReferences()
   const formats = msg.getContentFormats()
   const bodyText = msg.getMarkdown() || msg.getPlaintext() || msg.getHtml() || ''
+  // contentModel is stale after fromWire (library bug) — build the wire map
+  // from the getters instead of msg.contentModel.toWire()
+  const messageType: Record<string, string> = {}
+  const pt = msg.getPlaintext()
+  const md = msg.getMarkdown()
+  const html = msg.getHtml()
+  if (pt) messageType.plaintext = Buffer.from(pt, 'utf8').toString('base64')
+  if (md) messageType.md = Buffer.from(md, 'utf8').toString('base64')
+  if (html) messageType.html = Buffer.from(html, 'utf8').toString('base64')
   console.log(`[scanner] storeDirectMail: bodyText length=${bodyText.length} formats=${JSON.stringify(formats)}`)
   const messageData = JSON.stringify({
     mailFrom: msg.getFrom(),
     mailToList: msg.getRecipientsTo(),
     subjectLine: subject,
-    messageType: msg.contentModel.toWire(),
+    messageType,
     formats,
     bodyText,
     externalReferences,
@@ -126,12 +144,24 @@ async function storeBroadcastMail(
   const msg = scanned.message
   const formats = msg.getContentFormats()
   const externalReferences = msg.getExternalReferences()
-  const bodyText = msg.contentModel.get('md') || msg.contentModel.get('plaintext') || msg.contentModel.get('html') || ''
+  // NOTE: BroadcastMessage.fromWire reassigns .content but contentModel still
+  // points at the original empty instance (library bug) — always read the body
+  // through the getPlaintext/getMarkdown/getHtml getters, never contentModel.
+  const bodyText = msg.getMarkdown() || msg.getPlaintext() || msg.getHtml() || ''
+  const messageType: Record<string, string> = {}
+  const pt = msg.getPlaintext()
+  const md = msg.getMarkdown()
+  const html = msg.getHtml()
+  if (pt) messageType.plaintext = Buffer.from(pt, 'utf8').toString('base64')
+  if (md) messageType.md = Buffer.from(md, 'utf8').toString('base64')
+  if (html) messageType.html = Buffer.from(html, 'utf8').toString('base64')
   const messageData = JSON.stringify({
     mailFrom: msg.getAuthor(),
     mailToList: [],
+    replyTo: msg.getReplyTo() || null,
+    topic: msg.getTopic(),
     subjectLine: msg.getSubject(),
-    messageType: msg.contentModel.toWire(),
+    messageType,
     formats,
     bodyText,
     externalReferences,
@@ -160,6 +190,7 @@ async function scanIdentity(
   identityId: string,
   payload: VaultPayload,
   mainWindow: Electron.BrowserWindow | null,
+  mode: 'both' | 'direct' | 'broadcast' = 'both',
 ): Promise<{ direct: number; broadcast: number; errors: string[] }> {
   const errors: string[] = []
   let directCount = 0
@@ -184,6 +215,8 @@ async function scanIdentity(
       })
 
       const since = getSinceForAccount(payload.settings, account.pubkey)
+
+      if (mode !== 'broadcast') {
       console.log(`[scanner] Scanning direct inbox for ${account.pubkey.slice(0, 16)}... since=${since} (${new Date((since ?? 0) * 1000).toISOString()})`)
 
       // Debug: query ALL direct envelopes without since to verify visibility
@@ -233,8 +266,19 @@ async function scanIdentity(
       const count = db.prepare('SELECT COUNT(*) as c FROM mail WHERE accountId = ?').get(account.pubkey) as { c: number }
       console.log(`[scanner] DB verify: ${count.c} total mail rows for account ${account.pubkey.slice(0, 16)}...`)
 
-      // Broadcast mail
-      const subs = dao.getSubscriptions(db, account.pubkey)
+      // Update lastRetrieved (direct cursor)
+      const now = Math.floor(Date.now() / 1000)
+      payload.settings.lastRetrievedPerAccount = {
+        ...(payload.settings.lastRetrievedPerAccount ?? {}),
+        [account.pubkey]: now,
+      }
+      } // end direct scan
+
+      if (mode !== 'direct') {
+      // Broadcast mail. Subscription relay hints from the naddr are where the
+      // publisher posts, so scan those in addition to the account relays.
+      const bcDb = getDb(identityId)
+      const subs = dao.getSubscriptions(bcDb, account.pubkey)
       for (const sub of subs) {
         try {
           client.addBroadcastCredential(sub.naddr)
@@ -243,19 +287,32 @@ async function scanIdentity(
         }
       }
 
-      const broadcastResult = await client.checkBroadcastInbox({ since })
-      for (const mail of broadcastResult) {
-        if (await storeBroadcastMail(identityId, account.pubkey, mail)) {
-          broadcastCount++
+      if (subs.length > 0) {
+        const hintRelays = subs.flatMap((s) => {
+          try {
+            return s.relays ? (JSON.parse(s.relays) as string[]) : []
+          } catch {
+            return []
+          }
+        })
+        const broadcastRelays = [...new Set([...hintRelays, ...relays])]
+        const broadcastSince = getBroadcastSinceForAccount(payload.settings, account.pubkey)
+        console.log(`[scanner] Scanning broadcast inbox for ${account.pubkey.slice(0, 16)}... since=${broadcastSince} relays=${broadcastRelays.length} (${hintRelays.length} from naddr hints)`)
+        const broadcastResult = await client.checkBroadcastInbox({ since: broadcastSince, relays: broadcastRelays })
+        for (const mail of broadcastResult) {
+          if (await storeBroadcastMail(identityId, account.pubkey, mail)) {
+            broadcastCount++
+          }
+        }
+
+        // Broadcast runs on its own schedule — its cursor advances separately
+        // so direct scans never skip broadcast events (and vice versa)
+        payload.settings.lastBroadcastRetrievedPerAccount = {
+          ...(payload.settings.lastBroadcastRetrievedPerAccount ?? {}),
+          [account.pubkey]: Math.floor(Date.now() / 1000),
         }
       }
-
-      // Update lastRetrieved
-      const now = Math.floor(Date.now() / 1000)
-      payload.settings.lastRetrievedPerAccount = {
-        ...(payload.settings.lastRetrievedPerAccount ?? {}),
-        [account.pubkey]: now,
-      }
+      } // end broadcast scan
     } catch (e) {
       errors.push(`Account ${account.pubkey.slice(0, 16)}...: ${String(e)}`)
     }
@@ -308,27 +365,31 @@ export function startAutoScan(
   // Un-stick sends interrupted by an app quit and resume the outbox queue
   recoverOutbox(identityId)
 
-  const intervalId = setInterval(async () => {
+  const runScan = async (mode: 'direct' | 'broadcast') => {
     const session = getUnlockedSession(identityId)
     if (!session) {
       stopAutoScan(identityId)
       return
     }
     try {
-      await scanIdentity(identityId, session.payload, mainWindow)
+      await scanIdentity(identityId, session.payload, mainWindow, mode)
     } catch (e) {
-      console.error(`[scanner] auto-scan error for ${identityId}:`, e)
+      console.error(`[scanner] auto-scan (${mode}) error for ${identityId}:`, e)
     }
-  }, AUTO_SCAN_INTERVAL_MS)
+  }
 
-  scanStates.set(identityId, { intervalId, scanning: false })
-  console.log(`[scanner] auto-scan started for ${identityId}`)
+  const directIntervalId = setInterval(() => { void runScan('direct') }, AUTO_SCAN_INTERVAL_MS)
+  const broadcastIntervalId = setInterval(() => { void runScan('broadcast') }, BROADCAST_SCAN_INTERVAL_MS)
+
+  scanStates.set(identityId, { directIntervalId, broadcastIntervalId })
+  console.log(`[scanner] auto-scan started for ${identityId} (direct ${AUTO_SCAN_INTERVAL_MS / 60000}m, broadcast ${BROADCAST_SCAN_INTERVAL_MS / 60000}m)`)
 }
 
 export function stopAutoScan(identityId: string): void {
   const state = scanStates.get(identityId)
   if (state) {
-    clearInterval(state.intervalId)
+    clearInterval(state.directIntervalId)
+    clearInterval(state.broadcastIntervalId)
     scanStates.delete(identityId)
     console.log(`[scanner] auto-scan stopped for ${identityId}`)
   }
@@ -336,7 +397,8 @@ export function stopAutoScan(identityId: string): void {
 
 export function stopAllScans(): void {
   for (const [identityId, state] of scanStates) {
-    clearInterval(state.intervalId)
+    clearInterval(state.directIntervalId)
+    clearInterval(state.broadcastIntervalId)
     console.log(`[scanner] auto-scan stopped for ${identityId}`)
   }
   scanStates.clear()

@@ -71,6 +71,19 @@ export interface DbAPI {
   subsAdd: (identityId: string, sub: unknown) => Promise<number>
   subsRemove: (identityId: string, id: number) => Promise<void>
   subsGetAll: (identityId: string, accountId: string) => Promise<unknown[]>
+  subsSubscribe: (identityId: string, accountId: string, naddr: string) => Promise<SubscriptionRecord>
+}
+
+export interface SubscriptionRecord {
+  id?: number
+  accountId: string
+  naddr: string
+  displayName?: string | null
+  topic: string
+  author?: string | null
+  relays?: string | null
+  since?: number | null
+  createdAt: number
 }
 
 export interface FileAPI {
@@ -237,6 +250,7 @@ const dbAPI: DbAPI = {
   subsAdd: (identityId, sub) => ipcRenderer.invoke('db:subs:add', identityId, sub),
   subsRemove: (identityId, id) => ipcRenderer.invoke('db:subs:remove', identityId, id),
   subsGetAll: (identityId, accountId) => ipcRenderer.invoke('db:subs:getAll', identityId, accountId),
+  subsSubscribe: (identityId, accountId, naddr) => ipcRenderer.invoke('subs:subscribe', identityId, accountId, naddr),
 }
 
 const fileAPI: FileAPI = {

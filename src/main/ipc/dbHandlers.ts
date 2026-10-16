@@ -2,6 +2,7 @@ import { ipcMain, app, BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
+import { decodeBroadcastNaddr } from 'nvelope-core'
 import * as dao from '../db/dao'
 
 // 'databases' is a reserved name: Chromium deletes userData/databases on startup
@@ -137,6 +138,8 @@ const MIGRATION_STATEMENTS = [
   'ALTER TABLE mail ADD COLUMN deletedAt INTEGER',
   'ALTER TABLE mail ADD COLUMN prevState TEXT',
   'ALTER TABLE mail ADD COLUMN prevFolderId INTEGER',
+  'ALTER TABLE subscriptions ADD COLUMN author TEXT',
+  'ALTER TABLE subscriptions ADD COLUMN relays TEXT',
 ]
 
 export function registerDbHandlers(): void {
@@ -196,6 +199,17 @@ export function registerDbHandlers(): void {
 
     // Permanently purge messages past the 14-day Deleted-folder retention
     dao.purgeDeletedMail(db, 14)
+
+    // Backfill subscription author/relay hints from the stored naddr
+    // (columns added after the initial schema)
+    const subsMissing = db.prepare('SELECT id, naddr FROM subscriptions WHERE author IS NULL').all() as Array<{ id: number; naddr: string }>
+    for (const s of subsMissing) {
+      try {
+        const cred = decodeBroadcastNaddr(s.naddr)
+        db.prepare('UPDATE subscriptions SET author = ?, relays = ? WHERE id = ?')
+          .run(cred.author, cred.relays ? JSON.stringify(cred.relays) : null, s.id)
+      } catch { /* invalid naddr — leave for the scan error path */ }
+    }
   })
 
   // --- Mail ---

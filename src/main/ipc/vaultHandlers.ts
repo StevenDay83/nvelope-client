@@ -22,6 +22,7 @@ export interface VaultPayload {
   settings: {
     benchmarkHashesPerMinute?: number
     lastRetrievedPerAccount?: Record<string, number>
+    lastBroadcastRetrievedPerAccount?: Record<string, number>
     preferences?: Record<string, unknown>
   }
 }
@@ -192,6 +193,7 @@ export function registerVaultHandlers(): void {
     if (!session) throw new Error('Identity is locked')
     const { payload, passphrase } = session
     payload.settings.lastRetrievedPerAccount = {}
+    payload.settings.lastBroadcastRetrievedPerAccount = {}
     persistVault(identityId, payload, passphrase)
   })
 

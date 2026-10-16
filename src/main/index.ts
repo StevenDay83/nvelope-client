@@ -12,6 +12,7 @@ import { registerSendHandlers } from './ipc/sendHandlers'
 import { registerOutboxHandlers } from './outbox/processor'
 import { registerNip05Handlers } from './ipc/nip05Handlers'
 import { registerContactSyncHandlers } from './ipc/contactSyncHandlers'
+import { registerSubscriptionHandlers } from './ipc/subscriptionHandlers'
 import { stopAllScans } from './relay/scanner'
 import { closeAllDbs } from './ipc/dbHandlers'
 
@@ -168,6 +169,7 @@ app.whenReady().then(() => {
   registerOutboxHandlers()
   registerNip05Handlers()
   registerContactSyncHandlers()
+  registerSubscriptionHandlers()
 
   ipcMain.handle('compose:open', (_event, data: Record<string, unknown>) => {
     createComposeWindow(data)

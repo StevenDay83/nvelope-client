@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { npubEncode, nsecEncode, decode } from 'nostr-tools/nip19'
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+import type { ContactRecord, SubscriptionRecord } from '../../preload'
 
 interface AccountData {
   pubkey: string
@@ -21,7 +22,7 @@ interface Props {
   onAccountsChanged?: (accounts: AccountData[]) => void
 }
 
-type Section = 'identity' | 'relays' | 'policy' | 'cache' | 'appearance' | 'security' | 'backup'
+type Section = 'identity' | 'relays' | 'policy' | 'subscriptions' | 'cache' | 'appearance' | 'security' | 'backup'
 
 const DEFAULT_RELAYS = [
   'wss://relay.damus.io',
@@ -34,6 +35,14 @@ function formatNpub(pubkeyHex: string): string {
   const npub = npubEncode(pubkeyHex)
   if (npub.length <= 28) return npub
   return npub.slice(0, 15) + '...' + npub.slice(-10)
+}
+
+function contactLabel(c: ContactRecord): string {
+  return c.displayName || (c.nip05Verified ? c.nip05 : null) || c.kind0DisplayName || c.kind0Name || formatNpub(c.pubkey)
+}
+
+function formatSubDate(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 export default function SettingsPanel({ identityId, identityName, accounts, onClose, onRenamed, onAccountsChanged }: Props) {
@@ -87,6 +96,66 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
   // Cache & Data section
   const [cacheStatus, setCacheStatus] = useState('')
   const [cacheBusy, setCacheBusy] = useState(false)
+
+  // Subscriptions section
+  const [subs, setSubs] = useState<SubscriptionRecord[]>([])
+  const [subContacts, setSubContacts] = useState<ContactRecord[]>([])
+  const [subsAccount, setSubsAccount] = useState(accounts[0]?.pubkey ?? '')
+  const [subNaddrInput, setSubNaddrInput] = useState('')
+  const [showSubForm, setShowSubForm] = useState(false)
+  const [subStatus, setSubStatus] = useState('')
+  const [subError, setSubError] = useState('')
+  const [subBusy, setSubBusy] = useState(false)
+
+  const loadSubscriptions = async () => {
+    if (!subsAccount) return
+    try {
+      const [list, contacts] = await Promise.all([
+        window.nvelope.db.subsGetAll(identityId, subsAccount) as Promise<SubscriptionRecord[]>,
+        window.nvelope.db.contactsGetAll(identityId, subsAccount) as Promise<ContactRecord[]>,
+      ])
+      setSubs(list)
+      setSubContacts(contacts)
+    } catch (e) {
+      console.error('[settings] failed to load subscriptions:', e)
+    }
+  }
+
+  useEffect(() => {
+    if (section === 'subscriptions') loadSubscriptions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, subsAccount])
+
+  const handleSubscribe = async () => {
+    setSubError('')
+    setSubStatus('')
+    setSubBusy(true)
+    try {
+      await window.nvelope.db.subsSubscribe(identityId, subsAccount, subNaddrInput)
+      setSubNaddrInput('')
+      setShowSubForm(false)
+      setSubStatus('Subscribed — checking for broadcasts now')
+      await loadSubscriptions()
+      // Pull existing broadcasts immediately instead of waiting for the 15-min timer
+      window.nvelope.relay.manualScan(identityId).catch((e) => console.error('[settings] post-subscribe scan failed:', e))
+    } catch (e) {
+      setSubError(String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, ''))
+    } finally {
+      setSubBusy(false)
+    }
+  }
+
+  const handleUnsubscribe = async (sub: SubscriptionRecord) => {
+    if (!confirm(`Unsubscribe from "${sub.topic}"? Already-received broadcasts stay in your mailbox.`)) return
+    await window.nvelope.db.subsRemove(identityId, sub.id!)
+    await loadSubscriptions()
+  }
+
+  const subAuthorLabel = (sub: SubscriptionRecord): string => {
+    if (!sub.author) return 'Unknown author'
+    const contact = subContacts.find((c) => c.pubkey === sub.author)
+    return contact ? contactLabel(contact) : (sub.displayName || formatNpub(sub.author))
+  }
 
   const policyBits = (minutes: number): string => {
     if (minutes <= 0 || !benchmarkHpm || benchmarkHpm <= 0) return 'no PoW required'
@@ -402,6 +471,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     { id: 'identity', label: 'Identity' },
     { id: 'relays', label: 'Relays' },
     { id: 'policy', label: 'Mail Policy' },
+    { id: 'subscriptions', label: 'Subscriptions' },
     { id: 'cache', label: 'Cache & Data' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
@@ -723,6 +793,96 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                   {policySaving ? 'Saving & publishing…' : 'Save policy'}
                 </button>
                 {policyStatus && <p className="text-xs text-emerald-400">{policyStatus}</p>}
+              </div>
+            )}
+
+            {section === 'subscriptions' && (
+              <div className="space-y-4">
+                {accounts.length > 1 && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-medium uppercase tracking-wider text-neutral-500">Account</label>
+                    <select
+                      value={subsAccount}
+                      onChange={(e) => setSubsAccount(e.target.value)}
+                      className="rounded-md border border-neutral-600 bg-neutral-800 px-2 py-1 text-sm outline-none focus:border-blue-500"
+                    >
+                      {accounts.map((a) => (
+                        <option key={a.pubkey} value={a.pubkey}>
+                          {a.displayName || formatNpub(a.pubkey)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-neutral-500">Broadcast Subscriptions</label>
+                  {subs.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-neutral-700 px-4 py-6 text-center text-sm text-neutral-500">
+                      No subscriptions yet. Subscribe to a broadcast list with its naddr credential.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {subs.map((sub) => (
+                        <div key={sub.id} className="flex items-center gap-3 rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-2.5">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-semibold text-neutral-100 truncate">{sub.topic}</div>
+                            <div className="text-xs text-neutral-400 truncate">{subAuthorLabel(sub)}</div>
+                            <div className="text-[11px] text-neutral-500">Subscribed {formatSubDate(sub.createdAt)}</div>
+                          </div>
+                          <button
+                            onClick={() => handleUnsubscribe(sub)}
+                            title="Unsubscribe"
+                            className="shrink-0 rounded-md p-1.5 text-neutral-500 hover:text-red-400 hover:bg-neutral-700 transition-colors"
+                          >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {showSubForm ? (
+                  <div className="space-y-2 rounded-md border border-neutral-700/50 bg-neutral-800/30 p-3">
+                    <input
+                      type="text"
+                      value={subNaddrInput}
+                      onChange={(e) => setSubNaddrInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !subBusy) handleSubscribe() }}
+                      placeholder="naddr1…"
+                      className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+                    />
+                    {subError && <p className="text-xs text-red-400">{subError}</p>}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSubscribe}
+                        disabled={subBusy || !subNaddrInput.trim()}
+                        className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                      >
+                        {subBusy ? 'Subscribing…' : 'Subscribe'}
+                      </button>
+                      <button
+                        onClick={() => { setShowSubForm(false); setSubNaddrInput(''); setSubError('') }}
+                        className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-neutral-500">
+                      The naddr carries the list password, topic, author, and relay hints. Broadcasts are pulled from the hinted relays and decrypted locally — no mail certificate involved.
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowSubForm(true)}
+                    className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 transition-colors"
+                  >
+                    Subscribe…
+                  </button>
+                )}
+                {subStatus && <p className="text-xs text-emerald-400">{subStatus}</p>}
               </div>
             )}
 

@@ -55,6 +55,8 @@ export interface SubscriptionRecord {
   naddr: string
   displayName?: string | null
   topic: string
+  author?: string | null
+  relays?: string | null // JSON array of relay hints from the naddr
   since?: number | null
   createdAt: number
 }
@@ -367,12 +369,13 @@ export function clearProfileCache(db: Database.Database): void {
 
 export function addSubscription(db: Database.Database, sub: SubscriptionRecord): number {
   const stmt = db.prepare(`
-    INSERT INTO subscriptions (accountId, naddr, displayName, topic, since, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO subscriptions (accountId, naddr, displayName, topic, author, relays, since, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const result = stmt.run(
     sub.accountId, sub.naddr, sub.displayName ?? null,
-    sub.topic, sub.since ?? null, sub.createdAt,
+    sub.topic, sub.author ?? null, sub.relays ?? null,
+    sub.since ?? null, sub.createdAt,
   )
   return Number(result.lastInsertRowid)
 }
