@@ -11,8 +11,15 @@ function parseMailBody(messageData: string): { html: string; isHtml: boolean } {
     const data = JSON.parse(messageData)
     // formats is a string[] on received mail, an object map on sent mail
     const formats = data.formats
-    const hasHtml = Array.isArray(formats) ? formats.includes('html') : formats?.html !== undefined
+    const fmtList: string[] = Array.isArray(formats) ? formats : Object.keys(formats ?? {})
+    const hasHtml = fmtList.includes('html')
     if (data.bodyText) {
+      // bodyText is filled with md > plaintext > html priority — render
+      // markdown/plaintext through the markdown renderer, html stays raw
+      // for the sanitizer + iframe path below.
+      if (fmtList.includes('md') || fmtList.includes('markdown') || fmtList.includes('plaintext')) {
+        return { html: renderMarkdown(data.bodyText), isHtml: false }
+      }
       return { html: data.bodyText, isHtml: hasHtml || !!data.messageType?.html }
     }
     const mt = data.messageType ?? {}
