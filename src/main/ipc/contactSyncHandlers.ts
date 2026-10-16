@@ -6,6 +6,8 @@ import { getUnlockedSession } from './vaultHandlers'
 import { getDb } from './dbHandlers'
 import { getBenchmarkHashesPerMinute } from '../clientSettings'
 import { CachingTransport } from '../relay/cachingTransport'
+import { enrichContactProfiles } from '../relay/profileEnrich'
+import { getContactAvatar, clearAvatarFiles } from '../relay/avatarCache'
 import * as dao from '../db/dao'
 
 const CONTACT_LIST_KIND = 3
@@ -196,6 +198,7 @@ export function registerContactSyncHandlers(): void {
         const result = await syncAccountContacts(transport, identityId, account.pubkey, relays)
         contacts += result.contacts
         mailEnabled += result.mailEnabled
+        await enrichContactProfiles(transport, identityId, account.pubkey, relays)
       }
       return { contacts, mailEnabled }
     } finally {
@@ -206,10 +209,48 @@ export function registerContactSyncHandlers(): void {
   ipcMain.handle('contacts:sync', (_event, identityId: string) => runContactSync(identityId))
 
   // Drop the cached cert/policy answers first so the resync re-reads relays.
+  // Also forces kind-0 profile re-enrichment and wipes cached avatars.
   ipcMain.handle('contacts:clearCacheAndResync', async (_event, identityId: string) => {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
-    dao.clearProfileCache(getDb(identityId))
-    return runContactSync(identityId)
+    const db = getDb(identityId)
+    dao.clearProfileCache(db)
+    dao.clearAvatarCache(db)
+    clearAvatarFiles()
+    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
+    const result = await runContactSync(identityId)
+    const transport = new CachingTransport(
+      new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
+      db,
+    )
+    try {
+      for (const account of session.payload.accounts) {
+        await enrichContactProfiles(transport, identityId, account.pubkey, relays, { force: true })
+      }
+    } finally {
+      transport.close()
+    }
+    return result
   })
+
+  // TTL-gated kind-0 refresh (30 min) — called when the address book opens.
+  ipcMain.handle('contacts:refreshProfiles', async (_event, identityId: string, accountId: string) => {
+    const session = getUnlockedSession(identityId)
+    if (!session) throw new Error('Identity is locked')
+    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
+    const transport = new CachingTransport(
+      new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
+      getDb(identityId),
+    )
+    try {
+      return await enrichContactProfiles(transport, identityId, accountId, relays)
+    } finally {
+      transport.close()
+    }
+  })
+
+  // Contact avatar as a data URL, cached on disk (4h TTL).
+  ipcMain.handle('contacts:getAvatar', (_event, identityId: string, accountId: string, pubkey: string) =>
+    getContactAvatar(identityId, accountId, pubkey),
+  )
 }

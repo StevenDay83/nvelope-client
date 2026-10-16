@@ -39,6 +39,10 @@ export interface ContactRecord {
   nip05?: string | null
   displayName?: string | null
   avatarUrl?: string | null
+  kind0Name?: string | null
+  kind0DisplayName?: string | null
+  nip05Verified?: number
+  profileFetchedAt?: number
   cachedAt?: number | null
   isNostrMailEnabled: number
 }
@@ -172,6 +176,8 @@ export interface ContactsListenerAPI {
   clearCacheAndResync: (identityId: string) => Promise<{ contacts: number; mailEnabled: number }>
   checkCert: (identityId: string, accountId: string, pubkey: string) => Promise<{ mailEnabled: boolean }>
   policyEta: (identityId: string, accountId: string, pubkey: string) => Promise<{ bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean; reason?: string }>
+  refreshProfiles: (identityId: string, accountId: string) => Promise<{ enriched: number }>
+  getAvatar: (identityId: string, accountId: string, pubkey: string) => Promise<string | null>
 }
 
 export interface AccountData {
@@ -318,6 +324,8 @@ const contactsListenerAPI: ContactsListenerAPI = {
   clearCacheAndResync: (identityId) => ipcRenderer.invoke('contacts:clearCacheAndResync', identityId),
   checkCert: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:checkCert', identityId, accountId, pubkey),
   policyEta: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:policyEta', identityId, accountId, pubkey),
+  refreshProfiles: (identityId, accountId) => ipcRenderer.invoke('contacts:refreshProfiles', identityId, accountId),
+  getAvatar: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:getAvatar', identityId, accountId, pubkey),
 }
 
 contextBridge.exposeInMainWorld('nvelope', { vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, mail: mailListenerAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })

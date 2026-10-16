@@ -120,12 +120,31 @@ CREATE TABLE IF NOT EXISTS profile_cache (
   fetchedAt INTEGER NOT NULL,
   PRIMARY KEY (pubkey, dTag)
 );
+
+CREATE TABLE IF NOT EXISTS avatar_cache (
+  pubkey TEXT PRIMARY KEY,
+  contentType TEXT NOT NULL,
+  fetchedAt INTEGER NOT NULL
+);
 `
+
+// Columns added after the initial schema — ALTERs fail harmlessly once applied.
+const MIGRATION_STATEMENTS = [
+  'ALTER TABLE contacts ADD COLUMN kind0Name TEXT',
+  'ALTER TABLE contacts ADD COLUMN kind0DisplayName TEXT',
+  'ALTER TABLE contacts ADD COLUMN nip05Verified INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE contacts ADD COLUMN profileFetchedAt INTEGER NOT NULL DEFAULT 0',
+]
 
 export function registerDbHandlers(): void {
   ipcMain.handle('db:initSchema', async (_event, identityId: string) => {
     const db = getDb(identityId)
     db.exec(INIT_SQL)
+    for (const stmt of MIGRATION_STATEMENTS) {
+      try {
+        db.exec(stmt)
+      } catch { /* column already exists */ }
+    }
 
     // Clean up duplicate global folders from old schema (pre-UNIQUE constraint)
     const dupCheck = db.prepare(`

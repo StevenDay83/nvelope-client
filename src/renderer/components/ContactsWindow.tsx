@@ -12,6 +12,10 @@ function formatNpub(pubkeyHex: string): string {
   return npub.slice(0, 18) + '...' + npub.slice(-10)
 }
 
+function contactLabel(c: ContactRecord): string {
+  return c.displayName || (c.nip05Verified ? c.nip05 : null) || c.kind0DisplayName || c.kind0Name || formatNpub(c.pubkey)
+}
+
 export default function ContactsWindow({ data }: Props) {
   const identityId = data.identityId as string
   const accountId = data.accountId as string
@@ -24,6 +28,21 @@ export default function ContactsWindow({ data }: Props) {
   const [syncing, setSyncing] = useState(false)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [policyEtas, setPolicyEtas] = useState<Record<string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean }>>({})
+  const [avatars, setAvatars] = useState<Record<string, string>>({})
+
+  const loadAvatars = useCallback(async (list: ContactRecord[]) => {
+    const entries = await Promise.all(
+      list.filter((c) => c.avatarUrl).map(async (c) => {
+        try {
+          const dataUrl = await window.nvelope.contacts.getAvatar(identityId, accountId, c.pubkey)
+          return [c.pubkey, dataUrl] as const
+        } catch {
+          return [c.pubkey, null] as const
+        }
+      }),
+    )
+    setAvatars(Object.fromEntries(entries.filter(([, v]) => v !== null) as Array<readonly [string, string]>))
+  }, [identityId, accountId])
 
   const loadPolicyEtas = useCallback(async (list: ContactRecord[]) => {
     const entries = await Promise.all(
@@ -40,7 +59,7 @@ export default function ContactsWindow({ data }: Props) {
   }, [identityId, accountId])
 
   const handleCopy = async (c: ContactRecord) => {
-    await navigator.clipboard.writeText(c.nip05 || npubEncode(c.pubkey))
+    await navigator.clipboard.writeText((c.nip05Verified ? c.nip05 : null) || npubEncode(c.pubkey))
     setCopiedKey(c.pubkey)
     setTimeout(() => setCopiedKey(null), 1500)
   }
@@ -64,11 +83,18 @@ export default function ContactsWindow({ data }: Props) {
     const list = (await window.nvelope.db.contactsGetAll(identityId, accountId)) as ContactRecord[]
     setContacts(list)
     loadPolicyEtas(list)
-  }, [identityId, accountId, loadPolicyEtas])
+    loadAvatars(list)
+  }, [identityId, accountId, loadPolicyEtas, loadAvatars])
 
   useEffect(() => {
     loadContacts()
   }, [loadContacts])
+
+  // TTL-gated; enrichment broadcasts contacts:changed which reloads the list
+  useEffect(() => {
+    if (!identityId || !accountId) return
+    window.nvelope.contacts.refreshProfiles(identityId, accountId).catch((e) => console.error('[contacts] profile refresh failed:', e))
+  }, [identityId, accountId])
 
   useEffect(() => {
     const unsub = window.nvelope.contacts.onChanged((change) => {
@@ -96,7 +122,7 @@ export default function ContactsWindow({ data }: Props) {
   }, [])
 
   const handleDelete = async (contact: ContactRecord) => {
-    const label = contact.displayName || contact.nip05 || formatNpub(contact.pubkey)
+    const label = contactLabel(contact)
     if (!confirm(`Delete contact ${label}?`)) return
     await window.nvelope.db.contactsRemove(identityId, accountId, contact.pubkey)
     setStatus('Contact deleted')
@@ -164,15 +190,19 @@ export default function ContactsWindow({ data }: Props) {
           <div className="divide-y divide-neutral-800">
             {contacts.map((c) => (
               <div key={c.pubkey} className={`flex items-center gap-3 px-4 py-2.5 hover:bg-neutral-800/50 ${c.isNostrMailEnabled ? '' : 'opacity-50'}`}>
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/20 text-xs font-bold text-blue-300">
-                  {(c.displayName || c.nip05 || '?').trim().slice(0, 2).toUpperCase()}
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-500/20 text-xs font-bold text-blue-300">
+                  {avatars[c.pubkey] ? (
+                    <img src={avatars[c.pubkey]} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    contactLabel(c).trim().slice(0, 2).toUpperCase()
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-neutral-100 truncate">
-                    {c.displayName || c.nip05 || formatNpub(c.pubkey)}
+                    {contactLabel(c)}
                   </div>
                   <div className="text-xs text-neutral-500 truncate">
-                    {c.displayName && c.nip05 ? `${c.nip05} · ` : ''}{formatNpub(c.pubkey)}
+                    {c.nip05Verified && c.nip05 && contactLabel(c) !== c.nip05 ? `${c.nip05} · ` : ''}{formatNpub(c.pubkey)}
                   </div>
                 </div>
                 {c.isNostrMailEnabled ? (
@@ -212,7 +242,7 @@ export default function ContactsWindow({ data }: Props) {
                 )}
                 <button
                   onClick={() => handleCopy(c)}
-                  title={`Copy ${c.nip05 ? 'NIP-05' : 'npub'} to clipboard`}
+                  title={`Copy ${c.nip05Verified && c.nip05 ? 'NIP-05' : 'npub'} to clipboard`}
                   className="shrink-0 rounded-md border border-neutral-600 bg-neutral-800 p-1.5 text-neutral-400 hover:text-blue-300 hover:bg-neutral-700 transition-colors"
                 >
                   {copiedKey === c.pubkey ? (
@@ -307,6 +337,7 @@ function ContactForm({
       } catch (e) {
         console.error('[contacts] cert check failed (will retry on next sync):', e)
       }
+      window.nvelope.contacts.refreshProfiles(identityId, accountId).catch((e) => console.error('[contacts] profile refresh failed:', e))
       onDone()
     } catch (e) {
       setError(String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, ''))

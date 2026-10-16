@@ -40,6 +40,10 @@ export interface ContactRecord {
   avatarUrl?: string | null
   cachedAt?: number | null
   isNostrMailEnabled: number
+  kind0Name?: string | null
+  kind0DisplayName?: string | null
+  nip05Verified?: number
+  profileFetchedAt?: number
 }
 
 export interface SubscriptionRecord {
@@ -234,6 +238,61 @@ export function getContacts(db: Database.Database, accountId: string): ContactRe
 export function deleteContact(db: Database.Database, accountId: string, pubkey: string): void {
   const stmt = db.prepare('DELETE FROM contacts WHERE accountId = ? AND pubkey = ?')
   stmt.run(accountId, pubkey)
+}
+
+/** kind-0 profile fields — never touches displayName (the user's manual override). */
+export function updateContactProfile(
+  db: Database.Database,
+  accountId: string,
+  pubkey: string,
+  profile: {
+    kind0Name: string | null
+    kind0DisplayName: string | null
+    nip05: string | null
+    nip05Verified: number
+    avatarUrl: string | null
+    profileFetchedAt: number
+  },
+): void {
+  db.prepare(`
+    UPDATE contacts SET
+      kind0Name = ?,
+      kind0DisplayName = ?,
+      nip05 = ?,
+      nip05Verified = ?,
+      avatarUrl = COALESCE(?, avatarUrl),
+      profileFetchedAt = ?
+    WHERE accountId = ? AND pubkey = ?
+  `).run(
+    profile.kind0Name, profile.kind0DisplayName, profile.nip05,
+    profile.nip05Verified, profile.avatarUrl, profile.profileFetchedAt,
+    accountId, pubkey,
+  )
+}
+
+// ------------------------------------------------------------------
+// Avatar cache DAO (files live in <userData>/avatars/, keyed by pubkey)
+// ------------------------------------------------------------------
+
+export interface AvatarCacheRecord {
+  pubkey: string
+  contentType: string
+  fetchedAt: number
+}
+
+export function getAvatarCache(db: Database.Database, pubkey: string): AvatarCacheRecord | null {
+  return (db.prepare('SELECT * FROM avatar_cache WHERE pubkey = ?').get(pubkey) as AvatarCacheRecord) ?? null
+}
+
+export function setAvatarCache(db: Database.Database, record: AvatarCacheRecord): void {
+  db.prepare(`
+    INSERT INTO avatar_cache (pubkey, contentType, fetchedAt) VALUES (?, ?, ?)
+    ON CONFLICT(pubkey) DO UPDATE SET contentType=excluded.contentType, fetchedAt=excluded.fetchedAt
+  `).run(record.pubkey, record.contentType, record.fetchedAt)
+}
+
+export function clearAvatarCache(db: Database.Database): void {
+  db.prepare('DELETE FROM avatar_cache').run()
 }
 
 // ------------------------------------------------------------------

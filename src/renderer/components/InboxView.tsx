@@ -55,6 +55,10 @@ function formatNpub(pubkeyHex: string): string {
   return npub.slice(0, 15) + '...' + npub.slice(-10)
 }
 
+function contactLabel(c: ContactRecord, fallbackPubkey: string): string {
+  return c.displayName || (c.nip05Verified ? c.nip05 : null) || c.kind0DisplayName || c.kind0Name || formatNpub(fallbackPubkey)
+}
+
 function getInitials(name: string): string {
   const trimmed = name.trim()
   if (!trimmed) return '?'
@@ -291,7 +295,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     if (toList.length === 0) return '(no recipient)'
     const first = toList[0]!
     const contact = contactsByPubkey[first]
-    const label = contact?.displayName || contact?.nip05 || formatNpub(first)
+    const label = contact ? contactLabel(contact, first) : formatNpub(first)
     return toList.length > 1 ? `${label} +${toList.length - 1}` : label
   }
 
@@ -504,7 +508,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   const getSenderDisplay = (mail: MailRecord): string => {
     if (mail.senderPubkey === 'nvelope') return 'nVelope'
     const contact = contactsByPubkey[mail.senderPubkey]
-    if (contact) return contact.displayName || contact.nip05 || formatNpub(mail.senderPubkey)
+    if (contact) return contactLabel(contact, mail.senderPubkey)
     return formatNpub(mail.senderPubkey)
   }
 
