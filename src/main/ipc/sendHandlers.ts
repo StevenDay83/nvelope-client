@@ -176,12 +176,29 @@ async function publishProfileToRelays(
     }
 
     // Publish kind 0 profile event (skipped for imported accounts — we only carry
-    // name/about/picture and would clobber the account's existing full profile)
+    // name/about/picture and would clobber the account's existing full profile).
+    // Kind 0 is replaceable, so merge with the newest existing event first:
+    // fields we don't manage (nip05, lud16, banner, website, ...) are preserved.
     if (!options?.skipKind0) {
+      let existing: Record<string, unknown> = {}
+      try {
+        const events = await pool.querySync(relays, { kinds: [0], authors: [account.pubkey] })
+        const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
+        if (newest) {
+          const parsed = JSON.parse(newest.content) as unknown
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            existing = parsed as Record<string, unknown>
+          }
+        }
+      } catch (e) {
+        console.warn('[publish] kind-0 merge: could not fetch existing profile, publishing ours only:', e)
+      }
+
       const profileContent = JSON.stringify({
-        name: account.displayName || '',
-        about: account.about || '',
-        picture: account.picture || '',
+        ...existing,
+        name: account.displayName || (typeof existing.name === 'string' ? existing.name : ''),
+        about: account.about || (typeof existing.about === 'string' ? existing.about : ''),
+        picture: account.picture || (typeof existing.picture === 'string' ? existing.picture : ''),
       })
 
       const profileEvent = finalizeEvent(
@@ -284,6 +301,15 @@ export function registerSendHandlers(): void {
       const draftsFolder = dao.getSpecialFolder(db, accountId, 'drafts')
       const folderId = draftsFolder?.id ?? null
 
+      // To field is ';'-separated and may be partially typed during autosave
+      const firstRecipient = payload.recipientNpub?.split(';')[0]?.trim() ?? ''
+      let recipientHex: string | null = null
+      if (firstRecipient.startsWith('npub1')) {
+        try {
+          recipientHex = npubToHex(firstRecipient)
+        } catch { /* partial input — leave null */ }
+      }
+
       const id = draftId ?? `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`
       const messageData = JSON.stringify({
         draftId: id,
@@ -301,7 +327,7 @@ export function registerSendHandlers(): void {
         folderId,
         state: 'draft',
         senderPubkey: accountId,
-        recipientPubkey: payload.recipientNpub ? npubToHex(payload.recipientNpub) : null,
+        recipientPubkey: recipientHex,
         subject: payload.subject || null,
         threadId: id,
         isBroadcast: 0,

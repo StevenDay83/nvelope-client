@@ -6,6 +6,10 @@ import type { ContactRecord } from '../../preload'
 // Nostr events can't carry significant binary data.
 const MAX_ATTACHMENT_LINKS = 10
 
+function contactLabel(c: ContactRecord): string {
+  return c.displayName || (c.nip05Verified ? c.nip05 : null) || c.kind0DisplayName || c.kind0Name || npubEncode(c.pubkey)
+}
+
 interface Props {
   identityId: string
   accountId: string
@@ -51,6 +55,7 @@ export default function Composer({
   const [linkInput, setLinkInput] = useState('')
   const [showLinkInput, setShowLinkInput] = useState(false)
   const [draftId, setDraftId] = useState<string | null>(null)
+  const [showAddressBook, setShowAddressBook] = useState(false)
 
   const addLink = useCallback(() => {
     const candidate = linkInput.trim()
@@ -92,6 +97,23 @@ export default function Composer({
   // Autocomplete/NIP-05 operate on the segment after the last ';'.
   const lastSegment = useMemo(() => to.split(';').pop()?.trim() ?? '', [to])
 
+  // Npubs currently committed in the To field (address book checkbox state)
+  const toSegments = useMemo(
+    () => new Set(to.split(';').map((s) => s.trim()).filter(Boolean)),
+    [to],
+  )
+
+  const toggleRecipient = (contact: ContactRecord) => {
+    if (!contact.isNostrMailEnabled) return
+    const npub = npubEncode(contact.pubkey)
+    const segments = to.split(';').map((s) => s.trim()).filter(Boolean)
+    if (segments.includes(npub)) {
+      setTo(segments.filter((s) => s !== npub).join('; '))
+    } else {
+      setTo([...segments, npub].join('; ') + '; ')
+    }
+  }
+
   const commitRecipient = (npub: string) => {
     const head = to.split(';').slice(0, -1).map((s) => s.trim())
     setTo([...head, npub].join('; ') + '; ')
@@ -107,6 +129,8 @@ export default function Composer({
       return (
         (c.displayName && c.displayName.toLowerCase().includes(q)) ||
         (c.nip05 && c.nip05.toLowerCase().includes(q)) ||
+        (c.kind0DisplayName && c.kind0DisplayName.toLowerCase().includes(q)) ||
+        (c.kind0Name && c.kind0Name.toLowerCase().includes(q)) ||
         npub.startsWith(q)
       )
     }).slice(0, 8)
@@ -370,9 +394,19 @@ export default function Composer({
           />
           {selectedContact && (
             <span className="ml-2 shrink-0 text-xs text-emerald-400">
-              {selectedContact.displayName || selectedContact.nip05 || 'contact'}
+              {contactLabel(selectedContact)}
             </span>
           )}
+          <button
+            type="button"
+            onClick={() => setShowAddressBook((v) => !v)}
+            title="Pick recipients from address book"
+            className={`ml-2 shrink-0 rounded p-1 transition-colors ${showAddressBook ? 'text-blue-300 bg-neutral-700' : 'text-neutral-500 hover:text-neutral-300'}`}
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </button>
           {showDropdown && (
             <div className="absolute left-16 right-0 top-full z-20 max-h-64 overflow-y-auto rounded-b-md border border-neutral-700 bg-neutral-800 shadow-xl">
               {matches.map((c, i) => (
@@ -388,9 +422,9 @@ export default function Composer({
                       : 'cursor-not-allowed opacity-40 text-neutral-500'
                   }`}
                 >
-                  <span className="font-medium truncate">{c.displayName || c.nip05 || npubEncode(c.pubkey).slice(0, 16) + '…'}</span>
+                  <span className="font-medium truncate">{contactLabel(c)}</span>
                   <span className="text-xs text-neutral-500 truncate">
-                    {c.displayName && c.nip05 ? c.nip05 : npubEncode(c.pubkey).slice(0, 20) + '…'}
+                    {c.nip05Verified && c.nip05 && contactLabel(c) !== c.nip05 ? c.nip05 : npubEncode(c.pubkey).slice(0, 20) + '…'}
                   </span>
                   {!c.isNostrMailEnabled && (
                     <span className="ml-auto shrink-0 text-[10px] text-neutral-600">no mail cert</span>
@@ -407,6 +441,48 @@ export default function Composer({
                 </button>
               )}
             </div>
+          )}
+          {showAddressBook && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setShowAddressBook(false)} />
+              <div className="absolute left-16 right-0 top-full z-20 max-h-64 overflow-y-auto rounded-b-md border border-neutral-700 bg-neutral-800 shadow-xl">
+                <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+                  Address book — mail-enabled contacts
+                </div>
+                {contacts.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-neutral-500">No contacts yet</div>
+                ) : (
+                  contacts.map((c) => {
+                    const npub = npubEncode(c.pubkey)
+                    const checked = toSegments.has(npub)
+                    return (
+                      <button
+                        key={c.pubkey}
+                        onClick={() => toggleRecipient(c)}
+                        disabled={!c.isNostrMailEnabled}
+                        title={c.isNostrMailEnabled ? undefined : 'No mail certificate published — cannot receive mail'}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+                          c.isNostrMailEnabled ? 'text-neutral-200 hover:bg-neutral-700' : 'cursor-not-allowed opacity-40 text-neutral-500'
+                        }`}
+                      >
+                        <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-blue-500 bg-blue-600' : 'border-neutral-600'}`}>
+                          {checked && (
+                            <svg className="h-3 w-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </span>
+                        <span className="font-medium truncate">{contactLabel(c)}</span>
+                        <span className="text-xs text-neutral-500 truncate">{npub.slice(0, 20)}…</span>
+                        {!c.isNostrMailEnabled && (
+                          <span className="ml-auto shrink-0 text-[10px] text-neutral-600">no mail cert</span>
+                        )}
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </>
           )}
         </div>
         {/* Subject */}

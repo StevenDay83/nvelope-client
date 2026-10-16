@@ -134,6 +134,9 @@ const MIGRATION_STATEMENTS = [
   'ALTER TABLE contacts ADD COLUMN kind0DisplayName TEXT',
   'ALTER TABLE contacts ADD COLUMN nip05Verified INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE contacts ADD COLUMN profileFetchedAt INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE mail ADD COLUMN deletedAt INTEGER',
+  'ALTER TABLE mail ADD COLUMN prevState TEXT',
+  'ALTER TABLE mail ADD COLUMN prevFolderId INTEGER',
 ]
 
 export function registerDbHandlers(): void {
@@ -170,9 +173,29 @@ export function registerDbHandlers(): void {
           ('__global__', 'Sent', 'sent', 1),
           ('__global__', 'Outbox', 'outbox', 2),
           ('__global__', 'Drafts', 'drafts', 3),
-          ('__global__', 'Junk', 'junk', 4)
+          ('__global__', 'Junk', 'junk', 4),
+          ('__global__', 'Deleted', 'deleted', 5)
       `).run()
     }
+
+    // The Deleted folder was added after the initial seed — add it to existing dbs
+    db.prepare(`
+      INSERT INTO folders (accountId, name, type, sortOrder)
+      SELECT '__global__', 'Deleted', 'deleted', 5
+      WHERE NOT EXISTS (SELECT 1 FROM folders WHERE accountId = '__global__' AND type = 'deleted')
+    `).run()
+
+    // Pre-Deleted-folder soft deletes left rows in place with state='deleted'
+    const deletedFolder = db.prepare("SELECT id FROM folders WHERE accountId = '__global__' AND type = 'deleted'").get() as { id: number } | undefined
+    if (deletedFolder) {
+      db.prepare(`
+        UPDATE mail SET folderId = ?, deletedAt = COALESCE(deletedAt, strftime('%s','now'))
+        WHERE state = 'deleted' AND (folderId IS NULL OR folderId != ?)
+      `).run(deletedFolder.id, deletedFolder.id)
+    }
+
+    // Permanently purge messages past the 14-day Deleted-folder retention
+    dao.purgeDeletedMail(db, 14)
   })
 
   // --- Mail ---
@@ -209,7 +232,18 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle('db:mail:moveToFolder', async (_event, identityId: string, innerEventId: string, folderId: number | null) => {
-    dao.moveToFolder(getDb(identityId), innerEventId, folderId)
+    const db = getDb(identityId)
+    const mail = db.prepare('SELECT state FROM mail WHERE innerEventId = ?').get(innerEventId) as { state: string } | undefined
+    const target = folderId == null
+      ? undefined
+      : db.prepare('SELECT type FROM folders WHERE id = ?').get(folderId) as { type: string } | undefined
+    if (target?.type === 'deleted') {
+      dao.softDeleteMail(db, innerEventId)
+    } else if (mail?.state === 'deleted') {
+      dao.restoreMail(db, innerEventId, folderId)
+    } else {
+      dao.moveToFolder(db, innerEventId, folderId)
+    }
   })
 
   ipcMain.handle('db:mail:softDelete', async (_event, identityId: string, innerEventId: string) => {

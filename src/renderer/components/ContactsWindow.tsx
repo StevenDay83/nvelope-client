@@ -29,6 +29,7 @@ export default function ContactsWindow({ data }: Props) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [policyEtas, setPolicyEtas] = useState<Record<string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean }>>({})
   const [avatars, setAvatars] = useState<Record<string, string>>({})
+  const [searchQuery, setSearchQuery] = useState('')
 
   const loadAvatars = useCallback(async (list: ContactRecord[]) => {
     const entries = await Promise.all(
@@ -139,6 +140,18 @@ export default function ContactsWindow({ data }: Props) {
     })
   }
 
+  const filteredContacts = contacts.filter((c) => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return true
+    return (
+      contactLabel(c).toLowerCase().includes(q) ||
+      (c.nip05?.toLowerCase().includes(q) ?? false) ||
+      (c.kind0Name?.toLowerCase().includes(q) ?? false) ||
+      (c.kind0DisplayName?.toLowerCase().includes(q) ?? false) ||
+      npubEncode(c.pubkey).toLowerCase().includes(q)
+    )
+  })
+
   return (
     <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
       {/* Toolbar */}
@@ -177,6 +190,17 @@ export default function ContactsWindow({ data }: Props) {
         />
       )}
 
+      {/* Search */}
+      <div className="border-b border-neutral-800 px-3 py-2">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search contacts (name, NIP-05, npub)…"
+          className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+        />
+      </div>
+
       {/* Contact list */}
       <div className="flex-1 overflow-y-auto">
         {contacts.length === 0 ? (
@@ -186,9 +210,13 @@ export default function ContactsWindow({ data }: Props) {
             </svg>
             <span className="text-sm">No contacts yet</span>
           </div>
+        ) : filteredContacts.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+            No contacts match "{searchQuery}"
+          </div>
         ) : (
           <div className="divide-y divide-neutral-800">
-            {contacts.map((c) => (
+            {filteredContacts.map((c) => (
               <div key={c.pubkey} className={`flex items-center gap-3 px-4 py-2.5 hover:bg-neutral-800/50 ${c.isNostrMailEnabled ? '' : 'opacity-50'}`}>
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-500/20 text-xs font-bold text-blue-300">
                   {avatars[c.pubkey] ? (

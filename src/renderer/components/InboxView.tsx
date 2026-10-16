@@ -8,7 +8,7 @@ interface FolderRecord {
   id: number
   accountId: string
   name: string
-  type: 'inbox' | 'sent' | 'outbox' | 'drafts' | 'junk' | 'user'
+  type: 'inbox' | 'sent' | 'outbox' | 'drafts' | 'junk' | 'deleted' | 'user'
   sortOrder: number
   createdAt: number
 }
@@ -277,9 +277,10 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     loadFolders()
   }
 
-  // Folders eligible as move targets (not queue/system folders, not the current one)
+  // Folders eligible as move targets (not queue/system folders, not the current one).
+  // Moving to the Deleted folder routes through soft-delete; moving out of it restores.
   const moveTargets = folders.filter(
-    (f) => (f.type === 'inbox' || f.type === 'junk' || f.type === 'user') && f.id !== selectedFolder,
+    (f) => (f.type === 'inbox' || f.type === 'junk' || f.type === 'deleted' || f.type === 'user') && f.id !== selectedFolder,
   )
 
   const selectedFolderType = folders.find((f) => f.id === selectedFolder)?.type
@@ -338,8 +339,17 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   }
 
   const handleDelete = async (mail: MailRecord) => {
-    if (!confirm('Move this message to trash?')) return
-    await window.nvelope.db.mailSoftDelete(identityId, mail.innerEventId)
+    const deletedFolder = folders.find((f) => f.type === 'deleted')
+    if (deletedFolder && mail.folderId === deletedFolder.id) {
+      if (!confirm('Permanently delete this message? This cannot be undone.')) return
+      await window.nvelope.db.mailDelete(identityId, mail.innerEventId)
+    } else {
+      if (!confirm('Move this message to the Deleted folder? It is permanently removed after 14 days.')) return
+      if (mail.state === 'pending' || mail.state === 'processing') {
+        try { await window.nvelope.send.cancel(identityId, mail.innerEventId) } catch { /* not in flight */ }
+      }
+      await window.nvelope.db.mailSoftDelete(identityId, mail.innerEventId)
+    }
     loadMails()
     loadFolders()
     if (selectedMail?.innerEventId === mail.innerEventId) {
@@ -1283,6 +1293,11 @@ function FolderIcon({ type }: { type: FolderRecord['type'] }) {
     junk: (
       <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+      </svg>
+    ),
+    deleted: (
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
       </svg>
     ),
     user: (

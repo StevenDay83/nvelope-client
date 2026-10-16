@@ -44,6 +44,13 @@ export default function App() {
     loadIdentities()
   }, [])
 
+  // Login screen errors dismiss themselves after a few seconds
+  useEffect(() => {
+    if (!error) return
+    const timer = setTimeout(() => setError(''), 5000)
+    return () => clearTimeout(timer)
+  }, [error])
+
   const loadIdentities = async () => {
     try {
       if (typeof window === 'undefined' || !window.nvelope) {
@@ -88,6 +95,7 @@ export default function App() {
   }, [])
 
   const handleUnlock = useCallback(async (identityId: string, passphrase: string) => {
+    setError('')
     try {
       const data = await window.nvelope.vault.unlockIdentity(identityId, passphrase)
       const identity = identities.find((i) => i.id === identityId) ?? { id: identityId, name: 'Unknown' }
@@ -113,6 +121,7 @@ export default function App() {
     }
     setAccounts([])
     setActiveIdentity(null)
+    setError('')
     setView('unlock')
   }, [activeIdentity])
 

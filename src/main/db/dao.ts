@@ -20,13 +20,16 @@ export interface MailRecord {
   messageType?: string | null
   keyInfo?: string | null
   messageData: string
+  deletedAt?: number | null
+  prevState?: string | null
+  prevFolderId?: number | null
 }
 
 export interface FolderRecord {
   id: number
   accountId: string
   name: string
-  type: 'inbox' | 'sent' | 'outbox' | 'drafts' | 'junk' | 'user'
+  type: 'inbox' | 'sent' | 'outbox' | 'drafts' | 'junk' | 'deleted' | 'user'
   sortOrder: number
   createdAt: number
 }
@@ -138,9 +141,38 @@ export function moveToFolder(db: Database.Database, innerEventId: string, folder
   stmt.run(folderId ?? null, innerEventId)
 }
 
+/** Move to the Deleted folder, remembering where it came from for restore. */
 export function softDeleteMail(db: Database.Database, innerEventId: string): void {
-  const stmt = db.prepare("UPDATE mail SET state = 'deleted' WHERE innerEventId = ?")
-  stmt.run(innerEventId)
+  const deleted = getSpecialFolder(db, '', 'deleted')
+  db.prepare(`
+    UPDATE mail SET
+      state = 'deleted',
+      prevState = state,
+      prevFolderId = folderId,
+      folderId = ?,
+      deletedAt = strftime('%s','now')
+    WHERE innerEventId = ?
+  `).run(deleted?.id ?? null, innerEventId)
+}
+
+/** Move a soft-deleted message to the chosen folder and restore its previous state. */
+export function restoreMail(db: Database.Database, innerEventId: string, folderId: number | null): void {
+  db.prepare(`
+    UPDATE mail SET
+      state = COALESCE(prevState, CASE WHEN senderPubkey = accountId THEN 'published' ELSE 'received' END),
+      folderId = ?,
+      prevState = NULL,
+      prevFolderId = NULL,
+      deletedAt = NULL
+    WHERE innerEventId = ? AND state = 'deleted'
+  `).run(folderId, innerEventId)
+}
+
+/** Permanently remove messages that have been in the Deleted folder past the retention window. */
+export function purgeDeletedMail(db: Database.Database, retentionDays: number): number {
+  const cutoff = Math.floor(Date.now() / 1000) - retentionDays * 24 * 60 * 60
+  const result = db.prepare("DELETE FROM mail WHERE state = 'deleted' AND deletedAt IS NOT NULL AND deletedAt < ?").run(cutoff)
+  return Number(result.changes)
 }
 
 export function deleteMail(db: Database.Database, innerEventId: string): void {
@@ -254,18 +286,21 @@ export function updateContactProfile(
     profileFetchedAt: number
   },
 ): void {
+  // nip05 is only overwritten when kind-0 actually carries one — otherwise a
+  // manually resolved identifier (from the add form) would be wiped. The
+  // verified flag follows the same rule.
   db.prepare(`
     UPDATE contacts SET
       kind0Name = ?,
       kind0DisplayName = ?,
-      nip05 = ?,
-      nip05Verified = ?,
+      nip05 = COALESCE(?, nip05),
+      nip05Verified = CASE WHEN ? IS NOT NULL THEN ? ELSE nip05Verified END,
       avatarUrl = COALESCE(?, avatarUrl),
       profileFetchedAt = ?
     WHERE accountId = ? AND pubkey = ?
   `).run(
     profile.kind0Name, profile.kind0DisplayName, profile.nip05,
-    profile.nip05Verified, profile.avatarUrl, profile.profileFetchedAt,
+    profile.nip05, profile.nip05Verified, profile.avatarUrl, profile.profileFetchedAt,
     accountId, pubkey,
   )
 }

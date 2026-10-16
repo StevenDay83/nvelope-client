@@ -233,12 +233,19 @@ async function processRow(
       },
     })
 
+    const current = db.prepare('SELECT state FROM mail WHERE innerEventId = ?').get(innerEventId) as { state: string } | undefined
+    if (!current || current.state === 'deleted') {
+      console.log(`[outbox] ${innerEventId.slice(0, 16)}... was deleted mid-send — leaving it in the Deleted folder`)
+      return
+    }
     const sentFolder = dao.getSpecialFolder(db, accountId, 'sent')
     dao.markMailSent(db, innerEventId, sentFolder?.id ?? null, results[0]?.event.id ?? '')
     emit({ phase: 'sent' })
     console.log(`[outbox] sent ${innerEventId.slice(0, 16)}... to ${recipientHexes.length} recipient(s)`)
   } catch (e) {
     const isAbort = e instanceof Error && e.name === 'AbortError'
+    const current = db.prepare('SELECT state FROM mail WHERE innerEventId = ?').get(innerEventId) as { state: string } | undefined
+    if (!current || current.state === 'deleted') return
     dao.setMailState(db, innerEventId, 'pending')
     if (isAbort) {
       emit({ phase: 'cancelled' })
