@@ -262,6 +262,11 @@ export function setProfileCache(db: Database.Database, record: ProfileCacheRecor
   `).run(record.pubkey, record.dTag, record.eventJson, record.fetchedAt)
 }
 
+/** Drop every cached cert/policy entry — next lookups go back to the relays. */
+export function clearProfileCache(db: Database.Database): void {
+  db.prepare('DELETE FROM profile_cache').run()
+}
+
 // ------------------------------------------------------------------
 // Subscription DAO
 // ------------------------------------------------------------------

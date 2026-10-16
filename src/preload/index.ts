@@ -24,6 +24,7 @@ export interface VaultAPI {
   addAccount: (identityId: string, account: AccountData) => Promise<void>
   deleteAccount: (identityId: string, pubkey: string) => Promise<void>
   updateSettings: (identityId: string, settings: IdentitySettings) => Promise<void>
+  resetScanCursor: (identityId: string) => Promise<void>
   renameIdentity: (identityId: string, name: string) => Promise<{ id: string; name: string }>
   changePassphrase: (identityId: string, currentPassphrase: string, newPassphrase: string) => Promise<void>
   getSettings: (identityId: string) => Promise<IdentitySettings>
@@ -168,6 +169,7 @@ export interface ContactsListenerAPI {
   onChanged: (callback: (data: { identityId: string; accountId: string }) => void) => () => void
   onPrefill: (callback: (data: Record<string, unknown>) => void) => () => void
   sync: (identityId: string) => Promise<{ contacts: number; mailEnabled: number }>
+  clearCacheAndResync: (identityId: string) => Promise<{ contacts: number; mailEnabled: number }>
   checkCert: (identityId: string, accountId: string, pubkey: string) => Promise<{ mailEnabled: boolean }>
   policyEta: (identityId: string, accountId: string, pubkey: string) => Promise<{ bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean; reason?: string }>
 }
@@ -197,6 +199,7 @@ const vaultAPI: VaultAPI = {
   addAccount: (identityId, account) => ipcRenderer.invoke('vault:addAccount', identityId, account),
   deleteAccount: (identityId, pubkey) => ipcRenderer.invoke('vault:deleteAccount', identityId, pubkey),
   updateSettings: (identityId, settings) => ipcRenderer.invoke('vault:updateSettings', identityId, settings),
+  resetScanCursor: (identityId) => ipcRenderer.invoke('vault:resetScanCursor', identityId),
   renameIdentity: (identityId, name) => ipcRenderer.invoke('vault:renameIdentity', identityId, name),
   changePassphrase: (identityId, currentPassphrase, newPassphrase) => ipcRenderer.invoke('vault:changePassphrase', identityId, currentPassphrase, newPassphrase),
   getSettings: (identityId) => ipcRenderer.invoke('vault:getSettings', identityId),
@@ -312,6 +315,7 @@ const contactsListenerAPI: ContactsListenerAPI = {
     return () => ipcRenderer.removeListener('contacts:prefill', handler)
   },
   sync: (identityId) => ipcRenderer.invoke('contacts:sync', identityId),
+  clearCacheAndResync: (identityId) => ipcRenderer.invoke('contacts:clearCacheAndResync', identityId),
   checkCert: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:checkCert', identityId, accountId, pubkey),
   policyEta: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:policyEta', identityId, accountId, pubkey),
 }

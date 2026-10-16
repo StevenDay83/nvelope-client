@@ -181,7 +181,7 @@ export function registerContactSyncHandlers(): void {
     }
   })
 
-  ipcMain.handle('contacts:sync', async (_event, identityId: string) => {
+  async function runContactSync(identityId: string): Promise<{ contacts: number; mailEnabled: number }> {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
     const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
@@ -201,5 +201,15 @@ export function registerContactSyncHandlers(): void {
     } finally {
       transport.close()
     }
+  }
+
+  ipcMain.handle('contacts:sync', (_event, identityId: string) => runContactSync(identityId))
+
+  // Drop the cached cert/policy answers first so the resync re-reads relays.
+  ipcMain.handle('contacts:clearCacheAndResync', async (_event, identityId: string) => {
+    const session = getUnlockedSession(identityId)
+    if (!session) throw new Error('Identity is locked')
+    dao.clearProfileCache(getDb(identityId))
+    return runContactSync(identityId)
   })
 }

@@ -186,6 +186,15 @@ export function registerVaultHandlers(): void {
     persistVault(identityId, payload, passphrase)
   })
 
+  // Forget the scan watermark — the next check re-fetches every envelope on the relays.
+  ipcMain.handle('vault:resetScanCursor', async (_event, identityId: string) => {
+    const session = unlockedSessions.get(identityId)
+    if (!session) throw new Error('Identity is locked')
+    const { payload, passphrase } = session
+    payload.settings.lastRetrievedPerAccount = {}
+    persistVault(identityId, payload, passphrase)
+  })
+
   ipcMain.handle('vault:renameIdentity', async (_event, identityId: string, name: string) => {
     const trimmed = name.trim()
     if (!trimmed) throw new Error('Name cannot be empty')

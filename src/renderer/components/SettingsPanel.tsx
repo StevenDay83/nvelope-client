@@ -21,7 +21,7 @@ interface Props {
   onAccountsChanged?: (accounts: AccountData[]) => void
 }
 
-type Section = 'identity' | 'relays' | 'policy' | 'appearance' | 'security' | 'backup'
+type Section = 'identity' | 'relays' | 'policy' | 'cache' | 'appearance' | 'security' | 'backup'
 
 const DEFAULT_RELAYS = [
   'wss://relay.damus.io',
@@ -83,6 +83,10 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
   const [accountStatus, setAccountStatus] = useState('')
   const [accountError, setAccountError] = useState(false)
   const [accountBusy, setAccountBusy] = useState(false)
+
+  // Cache & Data section
+  const [cacheStatus, setCacheStatus] = useState('')
+  const [cacheBusy, setCacheBusy] = useState(false)
 
   const policyBits = (minutes: number): string => {
     if (minutes <= 0 || !benchmarkHpm || benchmarkHpm <= 0) return 'no PoW required'
@@ -259,6 +263,36 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     }
   }
 
+  const handleClearCacheAndResync = async () => {
+    if (!confirm('Clear the cached mail certificates and recipient policies, then resync contacts from the relays? Contact names and notes you entered are kept.')) return
+    setCacheBusy(true)
+    setCacheStatus('')
+    try {
+      const result = await window.nvelope.contacts.clearCacheAndResync(identityId)
+      setCacheStatus(`Cache cleared — resynced ${result.contacts} contacts (${result.mailEnabled} can receive mail)`)
+    } catch (e) {
+      setCacheStatus('Failed: ' + String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, '').split('\n')[0])
+    } finally {
+      setCacheBusy(false)
+      setTimeout(() => setCacheStatus(''), 8000)
+    }
+  }
+
+  const handleResetScanCursor = async () => {
+    if (!confirm('Reset mail scan history? The next mail check re-downloads every envelope from the relays. Already-stored mail is kept and deduplicated.')) return
+    setCacheBusy(true)
+    setCacheStatus('')
+    try {
+      await window.nvelope.vault.resetScanCursor(identityId)
+      setCacheStatus('Scan history reset — the next Check Mail performs a full rescan')
+    } catch (e) {
+      setCacheStatus('Failed: ' + String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, '').split('\n')[0])
+    } finally {
+      setCacheBusy(false)
+      setTimeout(() => setCacheStatus(''), 8000)
+    }
+  }
+
   const refreshAccounts = async () => {
     const list = (await window.nvelope.vault.listAccounts(identityId)) as AccountData[]
     onAccountsChanged?.(list)
@@ -368,6 +402,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     { id: 'identity', label: 'Identity' },
     { id: 'relays', label: 'Relays' },
     { id: 'policy', label: 'Mail Policy' },
+    { id: 'cache', label: 'Cache & Data' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
     { id: 'backup', label: 'Backup' },
@@ -688,6 +723,38 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                   {policySaving ? 'Saving & publishing…' : 'Save policy'}
                 </button>
                 {policyStatus && <p className="text-xs text-emerald-400">{policyStatus}</p>}
+              </div>
+            )}
+
+            {section === 'cache' && (
+              <div className="space-y-5">
+                <div>
+                  <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-neutral-500">Contact data</label>
+                  <p className="mb-2 text-xs text-neutral-500">
+                    Mail certificates and recipient policies are cached locally to keep loading fast. If a contact's mail status or PoW estimate looks stale, clear the cache and pull fresh data from the relays.
+                  </p>
+                  <button
+                    onClick={handleClearCacheAndResync}
+                    disabled={cacheBusy}
+                    className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                  >
+                    {cacheBusy ? 'Working…' : 'Clear cache & resync contacts'}
+                  </button>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-neutral-500">Mail scanning</label>
+                  <p className="mb-2 text-xs text-neutral-500">
+                    Mail checks only fetch envelopes newer than the last check. Reset this to force a full rescan — stored mail is kept and duplicates are ignored.
+                  </p>
+                  <button
+                    onClick={handleResetScanCursor}
+                    disabled={cacheBusy}
+                    className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                  >
+                    Reset mail scan history
+                  </button>
+                </div>
+                {cacheStatus && <p className="text-xs text-emerald-400">{cacheStatus}</p>}
               </div>
             )}
 
