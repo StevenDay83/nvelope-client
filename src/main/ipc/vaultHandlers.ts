@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { getPublicKey } from 'nostr-tools/pure'
 import { decode } from 'nostr-tools/nip19'
+import { deleteDb } from './dbHandlers'
 
 const VAULT_DIR = path.join(app.getPath('userData'), 'vaults')
 const IDENTITIES_FILE = path.join(app.getPath('userData'), 'identities.json')
@@ -195,6 +196,16 @@ export function registerVaultHandlers(): void {
     payload.settings.lastRetrievedPerAccount = {}
     payload.settings.lastBroadcastRetrievedPerAccount = {}
     persistVault(identityId, payload, passphrase)
+  })
+
+  ipcMain.handle('vault:deleteIdentity', async (_event, identityId: string) => {
+    if (unlockedSessions.has(identityId)) throw new Error('Identity is unlocked — lock it before deleting')
+    const identities = getIdentities()
+    if (!identities.some((i) => i.id === identityId)) throw new Error('Identity not found')
+    const vaultPath = path.join(VAULT_DIR, `${identityId}.vault`)
+    if (fs.existsSync(vaultPath)) fs.rmSync(vaultPath)
+    saveIdentities(identities.filter((i) => i.id !== identityId))
+    deleteDb(identityId)
   })
 
   ipcMain.handle('vault:renameIdentity', async (_event, identityId: string, name: string) => {

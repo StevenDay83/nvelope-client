@@ -26,6 +26,7 @@ export interface VaultAPI {
   updateSettings: (identityId: string, settings: IdentitySettings) => Promise<void>
   resetScanCursor: (identityId: string) => Promise<void>
   renameIdentity: (identityId: string, name: string) => Promise<{ id: string; name: string }>
+  deleteIdentity: (identityId: string) => Promise<void>
   changePassphrase: (identityId: string, currentPassphrase: string, newPassphrase: string) => Promise<void>
   getSettings: (identityId: string) => Promise<IdentitySettings>
   listAccounts: (identityId: string) => Promise<AccountData[]>
@@ -220,6 +221,7 @@ const vaultAPI: VaultAPI = {
   updateSettings: (identityId, settings) => ipcRenderer.invoke('vault:updateSettings', identityId, settings),
   resetScanCursor: (identityId) => ipcRenderer.invoke('vault:resetScanCursor', identityId),
   renameIdentity: (identityId, name) => ipcRenderer.invoke('vault:renameIdentity', identityId, name),
+  deleteIdentity: (identityId) => ipcRenderer.invoke('vault:deleteIdentity', identityId),
   changePassphrase: (identityId, currentPassphrase, newPassphrase) => ipcRenderer.invoke('vault:changePassphrase', identityId, currentPassphrase, newPassphrase),
   getSettings: (identityId) => ipcRenderer.invoke('vault:getSettings', identityId),
   listAccounts: (identityId) => ipcRenderer.invoke('vault:listAccounts', identityId),

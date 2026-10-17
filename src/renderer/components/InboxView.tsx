@@ -300,8 +300,10 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     return toList.length > 1 ? `${label} +${toList.length - 1}` : label
   }
 
-  // Sent/Outbox rows show the recipient; everything else shows the sender
+  // Sent/Outbox rows show the recipient; everything else shows the sender.
+  // Broadcasts have no recipients (mailToList is empty) — always show the author.
   const getRowDisplay = (mail: MailRecord): string => {
+    if (mail.isBroadcast) return getSenderDisplay(mail)
     if (selectedFolderType === 'sent' || selectedFolderType === 'outbox' || mail.senderPubkey === selectedAccount) {
       return getRecipientsDisplay(mail)
     }
@@ -452,7 +454,44 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     }
   }, [identityId, selectedAccount])
 
+  // Drafts reopen in the composer (keyed by draftId so autosave updates the same row)
+  const handleEditDraft = (mail: MailRecord) => {
+    const acct = accounts.find((a) => a.pubkey === selectedAccount)
+    let recipient = ''
+    let draftSubject = mail.subject || ''
+    let draftBody = ''
+    let draftFormat: 'plaintext' | 'markdown' | 'html' = 'plaintext'
+    try {
+      const data = JSON.parse(mail.messageData)
+      if (typeof data.recipientNpub === 'string') recipient = data.recipientNpub
+      if (typeof data.subjectLine === 'string') draftSubject = data.subjectLine
+      if (data.formats && typeof data.formats === 'object') {
+        const key = Object.keys(data.formats)[0]
+        if (key) {
+          draftFormat = key === 'md' ? 'markdown' : (key as 'plaintext' | 'markdown' | 'html')
+          draftBody = String(data.formats[key] ?? '')
+        }
+      }
+    } catch { /* open with whatever the row fields carry */ }
+    window.nvelope.compose.open({
+      identityId,
+      accountId: selectedAccount,
+      accountDisplayName: acct?.displayName || undefined,
+      accountNpub: acct ? npubEncode(acct.pubkey) : undefined,
+      recipientNpub: recipient || undefined,
+      subject: draftSubject || undefined,
+      body: draftBody || undefined,
+      format: draftFormat,
+      threadId: mail.threadId || undefined,
+      draftId: mail.innerEventId,
+    })
+  }
+
   const handleSelectMail = async (mail: MailRecord) => {
+    if (mail.state === 'draft') {
+      handleEditDraft(mail)
+      return
+    }
     setSelectedMail(mail)
     setShowMoveMenu(false)
     setContextMenu(null)

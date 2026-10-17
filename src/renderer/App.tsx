@@ -176,6 +176,7 @@ export default function App() {
           initialIdentityId={lastIdentityId}
           onUnlock={handleUnlock}
           onCreateNew={() => setView('onboard')}
+          onDeleted={loadIdentities}
           error={error}
         />
       </div>

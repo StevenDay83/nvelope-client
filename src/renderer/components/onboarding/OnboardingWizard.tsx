@@ -8,6 +8,11 @@ function formatNpub(pubkeyHex: string): string {
   return npub.slice(0, 15) + '...' + npub.slice(-10)
 }
 
+function formatPolicyMinutes(m: number): string {
+  if (m % 1 === 0) return `${m} minute${m === 1 ? '' : 's'}`
+  return `${Math.floor(m)} min 30 sec`
+}
+
 // ------------------------------------------------------------------
 // Types
 // ------------------------------------------------------------------
@@ -859,42 +864,44 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         <div>
           <div className="flex justify-between text-sm mb-2">
             <span>Contacts (People I know)</span>
-            <span className="text-neutral-400">{data.policies.contactsMinutes} Minutes</span>
+            <span className="text-neutral-400">{formatPolicyMinutes(data.policies.contactsMinutes)}</span>
           </div>
           <input
             type="range"
             min={0}
             max={60}
+            step={0.5}
             value={data.policies.contactsMinutes}
             onChange={(e) =>
-              update('policies', { ...data.policies, contactsMinutes: parseInt(e.target.value) })
+              update('policies', { ...data.policies, contactsMinutes: parseFloat(e.target.value) })
             }
             className="w-full accent-blue-500"
           />
           <div className="flex justify-between text-xs text-neutral-500 mt-1">
-            <span>0 Minutes</span>
-            <span>60 Minutes</span>
+            <span>0 minutes</span>
+            <span>60 minutes</span>
           </div>
         </div>
 
         <div>
           <div className="flex justify-between text-sm mb-2">
             <span>Non-Contacts (People I may not know)</span>
-            <span className="text-neutral-400">{data.policies.nonContactsMinutes} Minutes</span>
+            <span className="text-neutral-400">{formatPolicyMinutes(data.policies.nonContactsMinutes)}</span>
           </div>
           <input
             type="range"
             min={0}
             max={60}
+            step={0.5}
             value={data.policies.nonContactsMinutes}
             onChange={(e) =>
-              update('policies', { ...data.policies, nonContactsMinutes: parseInt(e.target.value) })
+              update('policies', { ...data.policies, nonContactsMinutes: parseFloat(e.target.value) })
             }
             className="w-full accent-blue-500"
           />
           <div className="flex justify-between text-xs text-neutral-500 mt-1">
-            <span>0 Minutes</span>
-            <span>60 Minutes</span>
+            <span>0 minutes</span>
+            <span>60 minutes</span>
           </div>
         </div>
       </div>

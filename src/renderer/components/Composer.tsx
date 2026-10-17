@@ -20,6 +20,7 @@ interface Props {
   initialBody?: string
   initialFormat?: 'plaintext' | 'markdown' | 'html'
   initialThreadId?: string
+  initialDraftId?: string
   windowMode?: boolean
   onClose: () => void
   onSent: () => void
@@ -35,6 +36,7 @@ export default function Composer({
   initialBody = '',
   initialFormat = 'plaintext',
   initialThreadId,
+  initialDraftId,
   onClose,
   onSent,
 }: Props) {
@@ -54,7 +56,7 @@ export default function Composer({
   const [links, setLinks] = useState<string[]>([])
   const [linkInput, setLinkInput] = useState('')
   const [showLinkInput, setShowLinkInput] = useState(false)
-  const [draftId, setDraftId] = useState<string | null>(null)
+  const [draftId, setDraftId] = useState<string | null>(initialDraftId ?? null)
   const [showAddressBook, setShowAddressBook] = useState(false)
 
   const addLink = useCallback(() => {

@@ -162,6 +162,11 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     return `≈ ${Math.round(Math.log2(minutes * benchmarkHpm))} bits PoW`
   }
 
+  const formatPolicyMinutes = (m: number): string => {
+    if (m % 1 === 0) return `${m} minute${m === 1 ? '' : 's'}`
+    return `${Math.floor(m)} min 30 sec`
+  }
+
   const handlePublishProfile = async (account: AccountData) => {
     setPublishingAccount(account.pubkey)
     try {
@@ -726,36 +731,38 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                 <div>
                   <div className="flex justify-between text-sm mb-2">
                     <span>Contacts (People I know)</span>
-                    <span className="text-neutral-400">{contactsMinutes} Minutes</span>
+                    <span className="text-neutral-400">{formatPolicyMinutes(contactsMinutes)}</span>
                   </div>
                   <input
                     type="range"
                     min={0}
                     max={60}
+                    step={0.5}
                     value={contactsMinutes}
-                    onChange={(e) => setContactsMinutes(parseInt(e.target.value))}
+                    onChange={(e) => setContactsMinutes(parseFloat(e.target.value))}
                     className="w-full accent-blue-500"
                   />
                   <div className="flex justify-between text-xs text-neutral-500 mt-1">
-                    <span>0 Minutes</span>
+                    <span>0 minutes</span>
                     <span>{policyBits(contactsMinutes)}</span>
                   </div>
                 </div>
                 <div>
                   <div className="flex justify-between text-sm mb-2">
                     <span>Non-Contacts (People I may not know)</span>
-                    <span className="text-neutral-400">{nonContactsMinutes} Minutes</span>
+                    <span className="text-neutral-400">{formatPolicyMinutes(nonContactsMinutes)}</span>
                   </div>
                   <input
                     type="range"
                     min={0}
                     max={60}
+                    step={0.5}
                     value={nonContactsMinutes}
-                    onChange={(e) => setNonContactsMinutes(parseInt(e.target.value))}
+                    onChange={(e) => setNonContactsMinutes(parseFloat(e.target.value))}
                     className="w-full accent-blue-500"
                   />
                   <div className="flex justify-between text-xs text-neutral-500 mt-1">
-                    <span>0 Minutes</span>
+                    <span>0 minutes</span>
                     <span>{policyBits(nonContactsMinutes)}</span>
                   </div>
                 </div>
@@ -797,7 +804,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
             )}
 
             {section === 'subscriptions' && (
-              <div className="space-y-4">
+              <div className="flex h-full flex-col gap-4">
                 {accounts.length > 1 && (
                   <div className="flex items-center gap-2">
                     <label className="text-xs font-medium uppercase tracking-wider text-neutral-500">Account</label>
@@ -814,8 +821,8 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                     </select>
                   </div>
                 )}
-                <div>
-                  <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-neutral-500">Broadcast Subscriptions</label>
+                <label className="block text-xs font-medium uppercase tracking-wider text-neutral-500">Broadcast Subscriptions</label>
+                <div className="flex-1 min-h-0 overflow-y-auto">
                   {subs.length === 0 ? (
                     <p className="rounded-md border border-dashed border-neutral-700 px-4 py-6 text-center text-sm text-neutral-500">
                       No subscriptions yet. Subscribe to a broadcast list with its naddr credential.

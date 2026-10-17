@@ -45,6 +45,20 @@ export function closeAllDbs(): void {
   dbConnections.clear()
 }
 
+export function deleteDb(identityId: string): void {
+  const db = dbConnections.get(identityId)
+  if (db) {
+    try {
+      db.close()
+    } catch (e) {
+      console.error(`[db] failed to close db for ${identityId}:`, e)
+    }
+    dbConnections.delete(identityId)
+  }
+  const dbPath = getDbPath(identityId)
+  if (fs.existsSync(dbPath)) fs.rmSync(dbPath)
+}
+
 const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS folders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
