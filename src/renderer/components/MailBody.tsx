@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
-import DOMPurify from 'dompurify'
+import { useMemo, useState, useRef, useEffect } from 'react'
 import { renderMarkdown } from '../lib/markdown'
+import { sanitizeMailHtml, buildMailSrcDoc } from '../lib/htmlMail'
 
 interface MailBodySource {
   messageData: string
@@ -35,70 +35,91 @@ function parseMailBody(messageData: string): { html: string; isHtml: boolean } {
   }
 }
 
-const IFRAME_BASE_STYLE = `
-  body { background: #0a0a0a; color: #e5e5e5; margin: 12px; word-wrap: break-word;
-         font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-  a { color: #60a5fa; }
-  img { max-width: 100%; height: auto; }
-  pre { overflow-x: auto; background: #262626; padding: 8px; border-radius: 6px; }
-  blockquote { border-left: 3px solid #3b82f6; margin-left: 0; padding-left: 12px; color: #a3a3a3; }
-`
-
-function buildSrcDoc(html: string, allowRemoteImages: boolean): string {
-  // Remote content stays blocked until the user opts in — also stops tracking pixels.
-  const imgSrc = allowRemoteImages ? "img-src data: https:;" : 'img-src data:;'
-  const csp = `default-src 'none'; ${imgSrc} style-src 'unsafe-inline'; font-src data:;`
-  return [
-    '<!DOCTYPE html><html><head><meta charset="utf-8">',
-    `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
-    '<base target="_blank">',
-    `<style>${IFRAME_BASE_STYLE}</style>`,
-    '</head><body>',
-    html,
-    '</body></html>',
-  ].join('')
+/** Strips src from remote images in rendered markdown until the user opts in. */
+function gateMarkdownImages(html: string): { html: string; hasRemoteImages: boolean } {
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html')
+  let hasRemoteImages = false
+  for (const img of Array.from(doc.querySelectorAll('img'))) {
+    const src = img.getAttribute('src') ?? ''
+    if (/^https?:/i.test(src)) {
+      hasRemoteImages = true
+      img.setAttribute('data-src', src)
+      img.removeAttribute('src')
+    }
+  }
+  return { html: doc.body.innerHTML, hasRemoteImages }
 }
 
 /**
  * Renders a stored message body. Markdown/plaintext goes through the inline
  * markdown renderer (escapes raw HTML). HTML bodies are DOMPurify-sanitized
- * and isolated in a sandboxed iframe (no scripts, no same-origin) behind a
- * strict CSP; remote images load only after the user clicks "Load images".
+ * as whole documents (head <style> blocks and table layouts survive) and
+ * isolated in a sandboxed iframe (no scripts) behind a strict CSP; remote
+ * images load only after the user clicks "Load images", on both paths.
  * Links open externally via <base target="_blank"> + allow-popups, which the
  * main process routes through shell.openExternal (setWindowOpenHandler).
  */
 export default function MailBody({ mail }: { mail: MailBodySource }) {
   const { html, isHtml } = useMemo(() => parseMailBody(mail.messageData), [mail.messageData])
   const [loadImages, setLoadImages] = useState(false)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
 
-  const sanitized = useMemo(
-    () => (isHtml ? DOMPurify.sanitize(html, { USE_PROFILES: { html: true } }) : html),
-    [html, isHtml],
+  useEffect(() => {
+    setLoadImages(false)
+    if (iframeRef.current) iframeRef.current.style.height = ''
+  }, [mail.messageData])
+
+  const sanitized = useMemo(() => (isHtml ? sanitizeMailHtml(html) : html), [html, isHtml])
+  const gated = useMemo(
+    () => (!isHtml && !loadImages ? gateMarkdownImages(sanitized) : null),
+    [isHtml, loadImages, sanitized],
+  )
+
+  const hasRemoteImages = isHtml
+    ? /<img[^>]+src=["']https?:/i.test(sanitized)
+    : loadImages
+      ? /<img[^>]+src=["']https?:/i.test(sanitized)
+      : (gated?.hasRemoteImages ?? false)
+
+  const loadImagesButton = hasRemoteImages && !loadImages && (
+    <button
+      onClick={(e) => { e.stopPropagation(); setLoadImages(true) }}
+      className="mb-2 rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-700 transition-colors"
+    >
+      Load remote images
+    </button>
   )
 
   if (!isHtml) {
     return (
-      <div
-        className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
-        dangerouslySetInnerHTML={{ __html: sanitized }}
-      />
+      <div>
+        {loadImagesButton}
+        <div
+          className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
+          dangerouslySetInnerHTML={{ __html: gated?.html ?? sanitized }}
+        />
+      </div>
     )
   }
 
-  const hasRemoteImages = /<img[^>]+src=["']https?:/i.test(sanitized)
+  // allow-same-origin (without allow-scripts) lets us measure the content
+  // height so long newsletters render in full instead of a small scroll box.
+  const resizeIframe = () => {
+    const iframe = iframeRef.current
+    const doc = iframe?.contentDocument
+    if (!iframe || !doc) return
+    const height = Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0, 200)
+    iframe.style.height = `${height}px`
+  }
+
   return (
     <div>
-      {hasRemoteImages && !loadImages && (
-        <button
-          onClick={(e) => { e.stopPropagation(); setLoadImages(true) }}
-          className="mb-2 rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-700 transition-colors"
-        >
-          Load remote images
-        </button>
-      )}
+      {loadImagesButton}
       <iframe
-        sandbox="allow-popups"
-        srcDoc={buildSrcDoc(sanitized, loadImages)}
+        ref={iframeRef}
+        sandbox="allow-popups allow-same-origin"
+        srcDoc={buildMailSrcDoc(sanitized, loadImages)}
+        onLoad={resizeIframe}
         title="Message content"
         className="h-96 w-full rounded-md border border-neutral-800"
       />

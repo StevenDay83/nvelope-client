@@ -30,6 +30,7 @@ export default function ContactsWindow({ data }: Props) {
   const [policyEtas, setPolicyEtas] = useState<Record<string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean }>>({})
   const [avatars, setAvatars] = useState<Record<string, string>>({})
   const [searchQuery, setSearchQuery] = useState('')
+  const [mailOnly, setMailOnly] = useState(false)
 
   const loadAvatars = useCallback(async (list: ContactRecord[]) => {
     const entries = await Promise.all(
@@ -141,6 +142,7 @@ export default function ContactsWindow({ data }: Props) {
   }
 
   const filteredContacts = contacts.filter((c) => {
+    if (mailOnly && !c.isNostrMailEnabled) return false
     const q = searchQuery.trim().toLowerCase()
     if (!q) return true
     return (
@@ -190,8 +192,8 @@ export default function ContactsWindow({ data }: Props) {
         />
       )}
 
-      {/* Search */}
-      <div className="border-b border-neutral-800 px-3 py-2">
+      {/* Search + mail-enabled filter */}
+      <div className="border-b border-neutral-800 px-3 py-2 space-y-2">
         <input
           type="text"
           value={searchQuery}
@@ -199,6 +201,16 @@ export default function ContactsWindow({ data }: Props) {
           placeholder="Search contacts (name, NIP-05, npub)…"
           className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
         />
+        <label className="flex w-fit items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={mailOnly}
+            onChange={(e) => setMailOnly(e.target.checked)}
+            className="accent-blue-500"
+          />
+          Mail-enabled only
+          <span className="text-neutral-600">(has a mail certificate)</span>
+        </label>
       </div>
 
       {/* Contact list */}
@@ -212,7 +224,7 @@ export default function ContactsWindow({ data }: Props) {
           </div>
         ) : filteredContacts.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-            No contacts match "{searchQuery}"
+            {searchQuery.trim() ? `No contacts match "${searchQuery}"` : 'No contacts match the current filter'}
           </div>
         ) : (
           <div className="divide-y divide-neutral-800">
