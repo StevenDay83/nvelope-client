@@ -108,6 +108,8 @@ export default function App() {
       await window.nvelope.settings.set('lastIdentityId', identityId)
       // Fire-and-forget: pull kind 3 / NIP-51 contacts + certificate status in the background
       window.nvelope.contacts.sync(identityId).catch((e) => console.error('[contacts] sync failed:', e))
+      // Refresh per-account NIP-65 relay lists in the background
+      window.nvelope.relayList.sync(identityId, true).catch((e) => console.error('[relayList] sync failed:', e))
       setView('inbox')
     } catch (e) {
       setError('Invalid passphrase or corrupted vault')

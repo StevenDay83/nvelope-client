@@ -38,6 +38,8 @@ interface WizardData {
   policies: { contactsMinutes: number; nonContactsMinutes: number }
   cert: { keySize: 2048 | 4096; privateKeyPem: string; publicKeyDerBase64: string }
   relays: string[]
+  relaySource: 'nip65' | 'kind3' | 'defaults' | null
+  relayCreatedAt: number | null
 }
 
 interface Props {
@@ -178,6 +180,8 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
     policies: { contactsMinutes: 5, nonContactsMinutes: 30 },
     cert: { keySize: 4096, privateKeyPem: '', publicKeyDerBase64: '' },
     relays: [...DEFAULT_RELAYS],
+    relaySource: null,
+    relayCreatedAt: null,
   })
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
@@ -186,7 +190,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
   const [, setStoredBenchmarkLoaded] = useState(false)
   const [keypairGenerated, setKeypairGenerated] = useState(false)
   const [importInput, setImportInput] = useState('')
-  const [importPreview, setImportPreview] = useState<{ pubkey: string; name?: string; picture?: string; about?: string } | null>(null)
+  const [importPreview, setImportPreview] = useState<{ pubkey: string; name?: string; picture?: string; about?: string; relaySource?: 'nip65' | 'kind3' | 'defaults'; relayCount?: number } | null>(null)
 
   // Load benchmark from general client settings on mount (v2 = hash-only algorithm;
   // older benchmarks measured sign+hash and read ~60x too slow — treat as absent)
@@ -276,14 +280,32 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       const decoded = decode(trimmed)
       if (decoded.type !== 'nsec') throw new Error('Expected an nsec1… secret key')
       const pubkey = getPublicKey(decoded.data as Uint8Array)
+
+      // Resolve the account's relays: its NIP-65 kind-10002 list first, then
+      // the kind-3 relay map, then built-in defaults (NIP-65 is republished on
+      // finalize for the kind-3/defaults fallbacks).
+      let resolvedRelays = data.relays
+      let relaySource: 'nip65' | 'kind3' | 'defaults' = 'defaults'
+      try {
+        const resolved = await window.nvelope.relayList.resolveImport(pubkey, data.relays)
+        resolvedRelays = resolved.relays
+        relaySource = resolved.source
+        update('relays', resolved.relays)
+        update('relaySource', resolved.source)
+        update('relayCreatedAt', resolved.createdAt ?? null)
+      } catch {
+        update('relaySource', 'defaults')
+        update('relayCreatedAt', null)
+      }
+
       let preview: { pubkey: string; name?: string; picture?: string; about?: string } = { pubkey }
       try {
-        const meta = await window.nvelope.profile.fetchMetadata(pubkey, data.relays)
+        const meta = await window.nvelope.profile.fetchMetadata(pubkey, resolvedRelays)
         if (meta) preview = { pubkey, name: meta.name, picture: meta.picture, about: meta.about }
       } catch {
         // profile fetch is best-effort — the account still imports without it
       }
-      setImportPreview(preview)
+      setImportPreview({ ...preview, relaySource, relayCount: resolvedRelays.length })
     } catch (e) {
       setError('Invalid secret key: ' + (e instanceof Error ? e.message : String(e)))
     } finally {
@@ -397,7 +419,12 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       console.log('[wizard] Account added to vault')
       await window.nvelope.vault.updateSettings(identity.id, {
         preferences: {
+          // Per-account NIP-65 mirror; `relays` stays as the legacy fallback
           relays: data.relays,
+          relaysPerAccount: { [data.pubkey]: data.relays },
+          ...(data.relaySource === 'nip65'
+            ? { relaysFetchedPerAccount: { [data.pubkey]: { fetchedAt: Date.now(), createdAt: data.relayCreatedAt ?? undefined } } }
+            : {}),
           policies: data.policies,
         },
       })
@@ -413,6 +440,18 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       } catch (publishErr) {
         console.warn('[onboarding] Profile publish failed:', publishErr)
         // Don't block onboarding if publish fails — user can retry later via Inbox
+      }
+
+      // Publish the NIP-65 kind-10002 relay list: always for new accounts; for
+      // imports only when the account had no usable list of its own (kind-3
+      // relays get republished as 10002, defaults get published fresh).
+      if (data.accountType === 'new' || data.relaySource !== 'nip65') {
+        try {
+          const rlResult = await window.nvelope.relayList.publish(identity.id, data.pubkey)
+          console.log('[onboarding] Relay list published:', rlResult)
+        } catch (rlErr) {
+          console.warn('[onboarding] Relay list publish failed:', rlErr)
+        }
       }
 
       // Inject welcome message
@@ -461,7 +500,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       case 0: setScreen('benchmark'); break
       case 1: setScreen('identity'); break
       case 2: setScreen('accountChoice'); break
-      case 3: setScreen('network'); break
+      case 3: setScreen(data.accountType === 'existing' ? 'certificate' : 'network'); break
       case 4: setScreen('review'); break
     }
   }
@@ -711,6 +750,16 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
               <p className="font-mono text-xs text-blue-400" title={npubEncode(importPreview.pubkey)}>
                 {formatNpub(importPreview.pubkey)}
               </p>
+              {importPreview.relaySource && (
+                <p className="text-xs text-neutral-400 mt-1">
+                  Relays: {importPreview.relayCount} found{' '}
+                  {importPreview.relaySource === 'nip65'
+                    ? 'from your NIP-65 relay list'
+                    : importPreview.relaySource === 'kind3'
+                      ? 'from your contact list (kind 3) — will be published as a NIP-65 list'
+                      : '— none published; using defaults (will be published as a NIP-65 list)'}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -985,7 +1034,9 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
             return
           }
           setError('')
-          setScreen('network')
+          // Imported accounts already have relays (resolved during import) —
+          // the relay editor only applies to brand-new accounts.
+          setScreen(data.accountType === 'existing' ? 'review' : 'network')
         }}
         nextDisabled={!data.cert.privateKeyPem}
       />
@@ -1092,7 +1143,14 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         </div>
         <div>
           <span className="text-neutral-400">Relays:</span>{' '}
-          <span className="text-neutral-200">{data.relays.length} configured</span>
+          <span className="text-neutral-200">
+            {data.relays.length} configured
+            {data.accountType === 'existing' && data.relaySource && (
+              <span className="text-neutral-500">
+                {' '}({data.relaySource === 'nip65' ? 'from NIP-65 relay list' : data.relaySource === 'kind3' ? 'from kind 3 contact list' : 'defaults'})
+              </span>
+            )}
+          </span>
         </div>
         <div>
           <span className="text-neutral-400">Benchmark:</span>{' '}
@@ -1103,7 +1161,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       {error && <p className="text-sm text-red-400">{error}</p>}
 
       <NavButtons
-        onBack={() => setScreen('network')}
+        onBack={() => setScreen(data.accountType === 'existing' ? 'certificate' : 'network')}
         onNext={finish}
         nextLabel={working ? 'Saving...' : 'Save and Publish'}
         nextDisabled={working}

@@ -7,6 +7,7 @@ import { RecipientPolicy } from 'nvelope-core'
 import { getUnlockedSession } from './vaultHandlers'
 import { getDb } from './dbHandlers'
 import { getBenchmarkHashesPerMinute } from '../clientSettings'
+import { DEFAULT_RELAYS, getRelaysForAccount } from '../relay/relayPrefs'
 import * as dao from '../db/dao'
 
 function decodeNsec(nsec: string): Uint8Array {
@@ -19,17 +20,6 @@ function npubToHex(npub: string): string {
   const result = decode(npub)
   if (result.type !== 'npub') throw new Error('Invalid npub format')
   return result.data as string
-}
-
-function getRelaysFromSettings(settings: Record<string, unknown>): string[] {
-  const relays = settings.relays
-  if (Array.isArray(relays) && relays.length > 0) return relays as string[]
-  return [
-    'wss://relay.damus.io',
-    'wss://nostr.mom',
-    'wss://nos.lol',
-    'wss://relay.primal.net',
-  ]
 }
 
 /** Publish an event to a list of relays using SimplePool */
@@ -238,7 +228,7 @@ export function registerSendHandlers(): void {
     const account = session.payload.accounts.find((a) => a.pubkey === accountId)
     if (!account) throw new Error('Account not found')
 
-    const relays = getRelaysFromSettings(session.payload.settings.preferences ?? {})
+    const relays = getRelaysForAccount((session.payload.settings.preferences ?? {}) as Record<string, unknown>, account.pubkey)
     const prefs = (session.payload.settings.preferences ?? {}) as Record<string, unknown>
     const hpm = getBenchmarkHashesPerMinute()
     const result = await publishProfileToRelays(account, relays, {
@@ -265,7 +255,7 @@ export function registerSendHandlers(): void {
   // Fetch a kind-0 profile (name/about/picture/nip05) for wizard account import.
   // Runs without an unlocked identity — the wizard has no session yet.
   ipcMain.handle('profile:fetchMetadata', async (_event, pubkeyHex: string, relays?: string[]) => {
-    const relayList = Array.isArray(relays) && relays.length > 0 ? relays : getRelaysFromSettings({})
+    const relayList = Array.isArray(relays) && relays.length > 0 ? relays : DEFAULT_RELAYS
     const pool = new SimplePool()
     try {
       const events = await pool.querySync(relayList, { kinds: [0], authors: [pubkeyHex] })

@@ -57,11 +57,14 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
   const [passStatus, setPassStatus] = useState('')
   const [passError, setPassError] = useState(false)
 
-  // Relays section
-  const [relays, setRelays] = useState<string[]>([])
+  // Relays section (per-account NIP-65 lists)
+  const [relaysPerAccount, setRelaysPerAccount] = useState<Record<string, string[]>>({})
+  const [savedRelaysPerAccount, setSavedRelaysPerAccount] = useState<Record<string, string[]>>({})
   const [allPrefs, setAllPrefs] = useState<Record<string, unknown>>({})
-  const [relayInput, setRelayInput] = useState('')
-  const [relayStatus, setRelayStatus] = useState('')
+  const [relayInputs, setRelayInputs] = useState<Record<string, string>>({})
+  const [relayStatus, setRelayStatus] = useState<Record<string, string>>({})
+  const [relayBusy, setRelayBusy] = useState<Record<string, boolean>>({})
+  const [relaySyncing, setRelaySyncing] = useState(false)
 
   // Appearance section
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>('dark')
@@ -196,15 +199,19 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
         const settings = await window.nvelope.vault.getSettings(identityId)
         const prefs = (settings.preferences ?? {}) as Record<string, unknown>
         setAllPrefs(prefs)
-        const r = prefs.relays
-        setRelays(Array.isArray(r) && r.length > 0 ? (r as string[]) : [...DEFAULT_RELAYS])
         const policies = (prefs.policies ?? {}) as { contactsMinutes?: number; nonContactsMinutes?: number; denyUntrusted?: boolean }
         setContactsMinutes(policies.contactsMinutes ?? 0)
         setNonContactsMinutes(policies.nonContactsMinutes ?? 0)
         setDenyUntrusted(policies.denyUntrusted === true)
       } catch (e) {
         console.error('[settings] failed to load vault settings:', e)
-        setRelays([...DEFAULT_RELAYS])
+      }
+      try {
+        const relayData = await window.nvelope.relayList.getAll(identityId)
+        setRelaysPerAccount(relayData.relaysPerAccount)
+        setSavedRelaysPerAccount(relayData.relaysPerAccount)
+      } catch (e) {
+        console.error('[settings] failed to load relay lists:', e)
       }
       // Hash rate is machine-level (client settings), shared across identities
       try {
@@ -263,34 +270,57 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     setTimeout(() => { setPassStatus(''); setPassError(false) }, 5000)
   }
 
-  const handleAddRelay = () => {
-    const url = relayInput.trim()
-    if (!url.startsWith('wss://')) {
-      setRelayStatus('Relay URL must start with wss://')
-      setTimeout(() => setRelayStatus(''), 4000)
-      return
-    }
-    if (relays.includes(url)) {
-      setRelayStatus('Relay already in list')
-      setTimeout(() => setRelayStatus(''), 4000)
-      return
-    }
-    setRelays([...relays, url])
-    setRelayInput('')
+  const setAccountRelayStatus = (pubkey: string, msg: string) => {
+    setRelayStatus((prev) => ({ ...prev, [pubkey]: msg }))
+    setTimeout(() => setRelayStatus((prev) => {
+      const next = { ...prev }
+      delete next[pubkey]
+      return next
+    }), 5000)
   }
 
-  const handleSaveRelays = async () => {
-    try {
-      const settings = await window.nvelope.vault.getSettings(identityId)
-      await window.nvelope.vault.updateSettings(identityId, {
-        ...settings,
-        preferences: { ...allPrefs, relays },
-      })
-      setRelayStatus('Relays saved — applies to next scan/send')
-    } catch (e) {
-      setRelayStatus('Save failed: ' + String(e))
+  const handleAddRelay = (pubkey: string) => {
+    const url = (relayInputs[pubkey] ?? '').trim()
+    if (!url.startsWith('wss://')) {
+      setAccountRelayStatus(pubkey, 'Relay URL must start with wss://')
+      return
     }
-    setTimeout(() => setRelayStatus(''), 5000)
+    const list = relaysPerAccount[pubkey] ?? []
+    if (list.includes(url)) {
+      setAccountRelayStatus(pubkey, 'Relay already in list')
+      return
+    }
+    setRelaysPerAccount((prev) => ({ ...prev, [pubkey]: [...list, url] }))
+    setRelayInputs((prev) => ({ ...prev, [pubkey]: '' }))
+  }
+
+  const handleSaveRelays = async (pubkey: string) => {
+    const list = relaysPerAccount[pubkey] ?? []
+    setRelayBusy((prev) => ({ ...prev, [pubkey]: true }))
+    try {
+      await window.nvelope.relayList.setForAccount(identityId, pubkey, list)
+      setSavedRelaysPerAccount((prev) => ({ ...prev, [pubkey]: list }))
+      setAccountRelayStatus(pubkey, 'Saved and published (NIP-65 kind 10002)')
+    } catch (e) {
+      const msg = String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, '')
+      setAccountRelayStatus(pubkey, 'Publish failed: ' + (msg.split('\n')[0] ?? msg))
+    } finally {
+      setRelayBusy((prev) => ({ ...prev, [pubkey]: false }))
+    }
+  }
+
+  const handleSyncRelays = async () => {
+    setRelaySyncing(true)
+    try {
+      await window.nvelope.relayList.sync(identityId, true)
+      const relayData = await window.nvelope.relayList.getAll(identityId)
+      setRelaysPerAccount(relayData.relaysPerAccount)
+      setSavedRelaysPerAccount(relayData.relaysPerAccount)
+    } catch (e) {
+      console.error('[settings] relay list sync failed:', e)
+    } finally {
+      setRelaySyncing(false)
+    }
   }
 
   const handleSavePolicy = async () => {
@@ -670,56 +700,82 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
             )}
 
             {section === 'relays' && (
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <p className="text-xs text-neutral-500">
-                  These relays are used for sending and scanning mail for this identity.
+                  Each account has its own relay list, published as a NIP-65 kind-10002 event. Saving publishes the list to the old and new relays. Lists are re-fetched from the network on unlock and every few hours.
                 </p>
-                <div className="space-y-1">
-                  {relays.map((relay, i) => (
-                    <div key={relay} className="flex items-center justify-between rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-1.5">
-                      <span className="text-sm text-neutral-200">{relay}</span>
-                      <button
-                        onClick={() => setRelays(relays.filter((_, idx) => idx !== i))}
-                        className="text-xs text-neutral-500 hover:text-red-400 transition-colors"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="wss://your-relay.example"
-                    value={relayInput}
-                    onChange={(e) => setRelayInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleAddRelay() }}
-                    className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
-                  />
+                <div>
                   <button
-                    onClick={handleAddRelay}
-                    disabled={!relayInput.trim()}
+                    onClick={handleSyncRelays}
+                    disabled={relaySyncing}
                     className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
                   >
-                    Add
+                    {relaySyncing ? 'Syncing…' : 'Re-fetch from network now'}
                   </button>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleSaveRelays}
-                    disabled={relays.length === 0}
-                    className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
-                  >
-                    Save relays
-                  </button>
-                  <button
-                    onClick={() => setRelays([...DEFAULT_RELAYS])}
-                    className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 transition-colors"
-                  >
-                    Reset to defaults
-                  </button>
-                </div>
-                {relayStatus && <p className="text-xs text-emerald-400">{relayStatus}</p>}
+                {accounts.map((account) => {
+                  const list = relaysPerAccount[account.pubkey] ?? []
+                  const saved = savedRelaysPerAccount[account.pubkey] ?? []
+                  const dirty = JSON.stringify(list) !== JSON.stringify(saved)
+                  return (
+                    <div key={account.pubkey} className="space-y-2 rounded-md border border-neutral-700/50 bg-neutral-800/30 p-3">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="text-sm font-medium text-neutral-200">
+                          {account.displayName || formatNpub(account.pubkey)}
+                        </p>
+                        <p className="font-mono text-xs text-neutral-500" title={npubEncode(account.pubkey)}>
+                          {formatNpub(account.pubkey)}
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        {list.map((relay, i) => (
+                          <div key={relay} className="flex items-center justify-between rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-1.5">
+                            <span className="text-sm text-neutral-200">{relay}</span>
+                            <button
+                              onClick={() => setRelaysPerAccount((prev) => ({ ...prev, [account.pubkey]: list.filter((_, idx) => idx !== i) }))}
+                              className="text-xs text-neutral-500 hover:text-red-400 transition-colors"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="wss://your-relay.example"
+                          value={relayInputs[account.pubkey] ?? ''}
+                          onChange={(e) => setRelayInputs((prev) => ({ ...prev, [account.pubkey]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleAddRelay(account.pubkey) }}
+                          className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+                        />
+                        <button
+                          onClick={() => handleAddRelay(account.pubkey)}
+                          disabled={!(relayInputs[account.pubkey] ?? '').trim()}
+                          className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                        >
+                          Add
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleSaveRelays(account.pubkey)}
+                          disabled={!dirty || list.length === 0 || relayBusy[account.pubkey]}
+                          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                        >
+                          {relayBusy[account.pubkey] ? 'Publishing…' : 'Save & publish'}
+                        </button>
+                        <button
+                          onClick={() => setRelaysPerAccount((prev) => ({ ...prev, [account.pubkey]: [...DEFAULT_RELAYS] }))}
+                          className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 transition-colors"
+                        >
+                          Reset to defaults
+                        </button>
+                      </div>
+                      {relayStatus[account.pubkey] && <p className="text-xs text-emerald-400">{relayStatus[account.pubkey]}</p>}
+                    </div>
+                  )
+                })}
               </div>
             )}
 

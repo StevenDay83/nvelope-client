@@ -13,6 +13,8 @@ import type { VaultPayload } from '../ipc/vaultHandlers'
 import { recoverOutbox } from '../outbox/processor'
 import { getDb } from '../ipc/dbHandlers'
 import { CachingTransport } from './cachingTransport'
+import { getRelaysForAccount } from './relayPrefs'
+import { syncRelayLists } from '../ipc/relayListHandlers'
 import * as dao from '../db/dao'
 
 interface ScanState {
@@ -28,18 +30,6 @@ function decodeNsec(nsec: string): Uint8Array {
   const result = decode(nsec)
   if (result.type !== 'nsec') throw new Error('Invalid nsec format')
   return result.data as Uint8Array
-}
-
-function getRelaysFromSettings(settings: VaultPayload['settings']): string[] {
-  const prefs = (settings.preferences ?? {}) as Record<string, unknown>
-  const relays = prefs.relays
-  if (Array.isArray(relays) && relays.length > 0) return relays as string[]
-  return [
-    'wss://relay.damus.io',
-    'wss://nostr.mom',
-    'wss://nos.lol',
-    'wss://relay.primal.net',
-  ]
 }
 
 function getSinceForAccount(settings: VaultPayload['settings'], pubkey: string): number | undefined {
@@ -196,7 +186,10 @@ async function scanIdentity(
   let directCount = 0
   let broadcastCount = 0
 
-  const relays = getRelaysFromSettings(payload.settings)
+  // Refresh the NIP-65 relay mirrors (TTL-gated) in the background — this scan
+  // uses whatever is already stored so it never blocks on relay-list fetches.
+  void syncRelayLists(identityId, false).catch((e) => console.error('[scanner] relay list sync error:', e))
+
   const transport = new CachingTransport(
     new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 8000 }),
     getDb(identityId),
@@ -204,6 +197,7 @@ async function scanIdentity(
 
   for (const account of payload.accounts) {
     try {
+      const relays = getRelaysForAccount(payload.settings.preferences as Record<string, unknown> | undefined, account.pubkey)
       const secretKey = decodeNsec(account.nsec)
       const signer = new NsecSigner(secretKey)
       const client = new NvelopeClient({

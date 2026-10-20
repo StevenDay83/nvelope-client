@@ -15,6 +15,7 @@ import { getUnlockedSession } from '../ipc/vaultHandlers'
 import { getDb } from '../ipc/dbHandlers'
 import { getBenchmarkHashesPerMinute } from '../clientSettings'
 import { CachingTransport } from '../relay/cachingTransport'
+import { getRelaysForAccount } from '../relay/relayPrefs'
 import * as dao from '../db/dao'
 
 const MAX_EXTERNAL_REFERENCES = 10
@@ -47,17 +48,6 @@ function npubToHex(npub: string): string {
   const result = decode(npub)
   if (result.type !== 'npub') throw new Error(`Invalid npub: ${npub}`)
   return result.data as string
-}
-
-function getRelaysFromSettings(settings: Record<string, unknown>): string[] {
-  const relays = settings.relays
-  if (Array.isArray(relays) && relays.length > 0) return relays as string[]
-  return [
-    'wss://relay.damus.io',
-    'wss://nostr.mom',
-    'wss://nos.lol',
-    'wss://relay.primal.net',
-  ]
 }
 
 /** External references (SPEC §3.1): this client emits http(s) links only. */
@@ -171,7 +161,7 @@ async function processRow(
 
   try {
     const secretKey = decodeNsec(nsec)
-    const relays = getRelaysFromSettings((settings.preferences ?? {}) as Record<string, unknown>)
+    const relays = getRelaysForAccount((settings.preferences ?? {}) as Record<string, unknown>, accountId)
     const transport = new CachingTransport(
       new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 15000 }),
       db,

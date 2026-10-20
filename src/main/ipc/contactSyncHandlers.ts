@@ -6,6 +6,7 @@ import { getUnlockedSession } from './vaultHandlers'
 import { getDb } from './dbHandlers'
 import { getBenchmarkHashesPerMinute } from '../clientSettings'
 import { CachingTransport } from '../relay/cachingTransport'
+import { getRelaysForAccount } from '../relay/relayPrefs'
 import { enrichContactProfiles } from '../relay/profileEnrich'
 import { getContactAvatar, clearAvatarFiles } from '../relay/avatarCache'
 import * as dao from '../db/dao'
@@ -15,17 +16,6 @@ const MUTE_LIST_KIND = 10000
 const PEOPLE_LIST_KIND = 30000
 const PROFILE_KIND = 30998
 const CERT_D_TAG = 'nv_public_key'
-
-function getRelays(preferences: Record<string, unknown> | undefined): string[] {
-  const relays = preferences?.relays
-  if (Array.isArray(relays) && relays.length > 0) return relays as string[]
-  return [
-    'wss://relay.damus.io',
-    'wss://nostr.mom',
-    'wss://nos.lol',
-    'wss://relay.primal.net',
-  ]
-}
 
 function newestPerKind(events: NostrEvent[], kind: number): NostrEvent | undefined {
   return events
@@ -128,7 +118,7 @@ export function registerContactSyncHandlers(): void {
   ipcMain.handle('contacts:checkCert', async (_event, identityId: string, accountId: string, pubkey: string) => {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
-    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
+    const relays = getRelaysForAccount(session.payload.settings.preferences as Record<string, unknown> | undefined, accountId)
     const db = getDb(identityId)
     const transport = new CachingTransport(
       new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
@@ -160,7 +150,7 @@ export function registerContactSyncHandlers(): void {
   ipcMain.handle('contacts:policyEta', async (_event, identityId: string, accountId: string, pubkey: string) => {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
-    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
+    const relays = getRelaysForAccount(session.payload.settings.preferences as Record<string, unknown> | undefined, accountId)
     const db = getDb(identityId)
     const transport = new CachingTransport(
       new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
@@ -186,7 +176,6 @@ export function registerContactSyncHandlers(): void {
   async function runContactSync(identityId: string): Promise<{ contacts: number; mailEnabled: number }> {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
-    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
     const transport = new CachingTransport(
       new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
       getDb(identityId),
@@ -195,6 +184,7 @@ export function registerContactSyncHandlers(): void {
       let contacts = 0
       let mailEnabled = 0
       for (const account of session.payload.accounts) {
+        const relays = getRelaysForAccount(session.payload.settings.preferences as Record<string, unknown> | undefined, account.pubkey)
         const result = await syncAccountContacts(transport, identityId, account.pubkey, relays)
         contacts += result.contacts
         mailEnabled += result.mailEnabled
@@ -217,7 +207,6 @@ export function registerContactSyncHandlers(): void {
     dao.clearProfileCache(db)
     dao.clearAvatarCache(db)
     clearAvatarFiles()
-    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
     const result = await runContactSync(identityId)
     const transport = new CachingTransport(
       new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
@@ -225,6 +214,7 @@ export function registerContactSyncHandlers(): void {
     )
     try {
       for (const account of session.payload.accounts) {
+        const relays = getRelaysForAccount(session.payload.settings.preferences as Record<string, unknown> | undefined, account.pubkey)
         await enrichContactProfiles(transport, identityId, account.pubkey, relays, { force: true })
       }
     } finally {
@@ -237,7 +227,7 @@ export function registerContactSyncHandlers(): void {
   ipcMain.handle('contacts:refreshProfiles', async (_event, identityId: string, accountId: string) => {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
-    const relays = getRelays(session.payload.settings.preferences as Record<string, unknown> | undefined)
+    const relays = getRelaysForAccount(session.payload.settings.preferences as Record<string, unknown> | undefined, accountId)
     const transport = new CachingTransport(
       new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 10000 }),
       getDb(identityId),

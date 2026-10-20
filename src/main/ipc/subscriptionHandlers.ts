@@ -3,18 +3,12 @@ import { SimplePool } from 'nostr-tools'
 import { decodeBroadcastNaddr } from 'nvelope-core'
 import { getUnlockedSession } from './vaultHandlers'
 import { getDb } from './dbHandlers'
+import { getRelaysForAccount } from '../relay/relayPrefs'
 import * as dao from '../db/dao'
 
-const DEFAULT_RELAYS = [
-  'wss://relay.damus.io',
-  'wss://nostr.mom',
-  'wss://nos.lol',
-  'wss://relay.primal.net',
-]
-
-function accountRelays(identityId: string): string[] {
+function accountRelays(identityId: string, accountId: string): string[] {
   const prefs = (getUnlockedSession(identityId)?.payload.settings.preferences ?? {}) as Record<string, unknown>
-  return Array.isArray(prefs.relays) && prefs.relays.length > 0 ? (prefs.relays as string[]) : DEFAULT_RELAYS
+  return getRelaysForAccount(prefs, accountId)
 }
 
 /**
@@ -52,7 +46,7 @@ export function registerSubscriptionHandlers(): void {
       throw new Error(`Already subscribed to "${cred.topic}"`)
     }
 
-    const relays = [...new Set([...(cred.relays ?? []), ...accountRelays(identityId)])]
+    const relays = [...new Set([...(cred.relays ?? []), ...accountRelays(identityId, accountId)])]
     const displayName = await fetchAuthorDisplayName(cred.author, relays)
 
     const sub: dao.SubscriptionRecord = {

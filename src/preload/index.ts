@@ -110,6 +110,20 @@ export interface RelayAPI {
   getScanStatus: () => Promise<Array<{ identityId: string; active: boolean }>>
 }
 
+export interface RelayListPublishResult {
+  eventId: string
+  createdAt: number
+  details: Array<{ url: string; ok: boolean; reason?: string }>
+}
+
+export interface RelayListAPI {
+  resolveImport: (pubkey: string, candidateRelays?: string[]) => Promise<{ relays: string[]; source: 'nip65' | 'kind3' | 'defaults'; createdAt?: number }>
+  publish: (identityId: string, pubkey: string) => Promise<RelayListPublishResult>
+  getAll: (identityId: string) => Promise<{ relaysPerAccount: Record<string, string[]>; fetched: Record<string, { fetchedAt: number; createdAt?: number }> }>
+  setForAccount: (identityId: string, pubkey: string, relays: string[]) => Promise<RelayListPublishResult>
+  sync: (identityId: string, force?: boolean) => Promise<{ synced: boolean }>
+}
+
 export interface MailListenerAPI {
   onNewMail: (callback: (data: { identityId: string; directCount: number; broadcastCount: number }) => void) => () => void
 }
@@ -278,6 +292,14 @@ const relayAPI: RelayAPI = {
   getScanStatus: () => ipcRenderer.invoke('relay:getScanStatus'),
 }
 
+const relayListAPI: RelayListAPI = {
+  resolveImport: (pubkey, candidateRelays) => ipcRenderer.invoke('relayList:resolveImport', pubkey, candidateRelays),
+  publish: (identityId, pubkey) => ipcRenderer.invoke('relayList:publish', identityId, pubkey),
+  getAll: (identityId) => ipcRenderer.invoke('relayList:getAll', identityId),
+  setForAccount: (identityId, pubkey, relays) => ipcRenderer.invoke('relayList:setForAccount', identityId, pubkey, relays),
+  sync: (identityId, force) => ipcRenderer.invoke('relayList:sync', identityId, force),
+}
+
 const mailListenerAPI: MailListenerAPI = {
   onNewMail: (callback) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { identityId: string; directCount: number; broadcastCount: number }) => callback(data)
@@ -344,9 +366,9 @@ const contactsListenerAPI: ContactsListenerAPI = {
   getAvatar: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:getAvatar', identityId, accountId, pubkey),
 }
 
-contextBridge.exposeInMainWorld('nvelope', { vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, mail: mailListenerAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
+contextBridge.exposeInMainWorld('nvelope', { vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, relayList: relayListAPI, mail: mailListenerAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
 
-export type NvelopeAPI = { vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; mail: MailListenerAPI; settings: SettingsAPI; send: SendAPI; outbox: OutboxAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
+export type NvelopeAPI = { vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; relayList: RelayListAPI; mail: MailListenerAPI; settings: SettingsAPI; send: SendAPI; outbox: OutboxAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
 
 declare global {
   interface Window {
