@@ -14,6 +14,7 @@ import { registerNip05Handlers } from './ipc/nip05Handlers'
 import { registerContactSyncHandlers } from './ipc/contactSyncHandlers'
 import { registerSubscriptionHandlers } from './ipc/subscriptionHandlers'
 import { registerRelayListHandlers } from './ipc/relayListHandlers'
+import { registerBlossomHandlers } from './ipc/blossomHandlers'
 import { stopAllScans } from './relay/scanner'
 import { closeAllDbs } from './ipc/dbHandlers'
 
@@ -172,6 +173,7 @@ app.whenReady().then(() => {
   registerContactSyncHandlers()
   registerSubscriptionHandlers()
   registerRelayListHandlers()
+  registerBlossomHandlers()
 
   ipcMain.handle('compose:open', (_event, data: Record<string, unknown>) => {
     createComposeWindow(data)

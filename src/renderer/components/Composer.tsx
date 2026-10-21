@@ -56,6 +56,8 @@ export default function Composer({
   const [links, setLinks] = useState<string[]>([])
   const [linkInput, setLinkInput] = useState('')
   const [showLinkInput, setShowLinkInput] = useState(false)
+  const [blossomHost, setBlossomHost] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
   const [draftId, setDraftId] = useState<string | null>(initialDraftId ?? null)
   const [showAddressBook, setShowAddressBook] = useState(false)
 
@@ -76,6 +78,33 @@ export default function Composer({
       setError('Attachments must be valid http(s) links')
     }
   }, [linkInput])
+
+  // Blossom upload target comes from Settings → Media & Upload (per identity)
+  useEffect(() => {
+    if (!identityId) return
+    window.nvelope.vault.getSettings(identityId).then((settings) => {
+      const bp = ((settings.preferences ?? {}) as Record<string, unknown>).blossom as
+        | { enabled?: boolean; selectedHost?: string }
+        | undefined
+      setBlossomHost(bp?.enabled && bp.selectedHost ? bp.selectedHost : null)
+    }).catch((e) => console.error('[composer] failed to load blossom settings:', e))
+  }, [identityId])
+
+  const handleUpload = async () => {
+    if (!blossomHost || uploading) return
+    setUploading(true)
+    setError('')
+    try {
+      const result = await window.nvelope.blossom.upload(identityId, accountId, blossomHost)
+      if (result.canceled || !result.url) return
+      // Uploaded URL lands in the text box — the user presses Add to attach it
+      setLinkInput(result.url)
+    } catch (e) {
+      setError('Upload failed: ' + String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, ''))
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const loadContacts = useCallback(async () => {
     if (!identityId || !accountId) return
@@ -520,6 +549,16 @@ export default function Composer({
               >
                 Add
               </button>
+              {blossomHost && (
+                <button
+                  onClick={handleUpload}
+                  disabled={uploading || links.length >= MAX_ATTACHMENT_LINKS}
+                  title={`Upload a file to ${blossomHost}`}
+                  className="rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                >
+                  {uploading ? 'Uploading…' : 'Upload…'}
+                </button>
+              )}
             </div>
           )}
           {links.length > 0 && (

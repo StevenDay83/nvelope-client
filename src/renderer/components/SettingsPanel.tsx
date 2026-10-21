@@ -22,7 +22,7 @@ interface Props {
   onAccountsChanged?: (accounts: AccountData[]) => void
 }
 
-type Section = 'identity' | 'relays' | 'policy' | 'subscriptions' | 'cache' | 'appearance' | 'security' | 'backup'
+type Section = 'identity' | 'relays' | 'policy' | 'subscriptions' | 'media' | 'cache' | 'appearance' | 'security' | 'backup'
 
 const DEFAULT_RELAYS = [
   'wss://relay.damus.io',
@@ -30,6 +30,34 @@ const DEFAULT_RELAYS = [
   'wss://nos.lol',
   'wss://relay.primal.net',
 ]
+
+interface BlossomServer {
+  name: string
+  host: string
+}
+
+interface BlossomPrefs {
+  enabled: boolean
+  servers: BlossomServer[]
+  selectedHost: string
+}
+
+const DEFAULT_BLOSSOM_SERVERS: BlossomServer[] = [
+  { name: 'Nostr.Build', host: 'blossom.band' },
+  { name: 'Primal', host: 'blossom.primal.net' },
+  { name: 'Nostr.Download', host: 'nostr.download' },
+  { name: 'pf7z', host: 'blossom.f7z.io' },
+]
+
+const DEFAULT_BLOSSOM_PREFS: BlossomPrefs = {
+  enabled: false,
+  servers: DEFAULT_BLOSSOM_SERVERS,
+  selectedHost: DEFAULT_BLOSSOM_SERVERS[0]!.host,
+}
+
+function blossomLabel(server: BlossomServer): string {
+  return server.name ? `${server.name} - ${server.host}` : server.host
+}
 
 function formatNpub(pubkeyHex: string): string {
   const npub = npubEncode(pubkeyHex)
@@ -109,6 +137,12 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
   const [subStatus, setSubStatus] = useState('')
   const [subError, setSubError] = useState('')
   const [subBusy, setSubBusy] = useState(false)
+
+  // Media & Upload (Blossom) section
+  const [blossom, setBlossom] = useState<BlossomPrefs>(DEFAULT_BLOSSOM_PREFS)
+  const [blossomNameInput, setBlossomNameInput] = useState('')
+  const [blossomHostInput, setBlossomHostInput] = useState('')
+  const [blossomStatus, setBlossomStatus] = useState('')
 
   const loadSubscriptions = async () => {
     if (!subsAccount) return
@@ -203,6 +237,14 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
         setContactsMinutes(policies.contactsMinutes ?? 0)
         setNonContactsMinutes(policies.nonContactsMinutes ?? 0)
         setDenyUntrusted(policies.denyUntrusted === true)
+        const bp = prefs.blossom as Partial<BlossomPrefs> | undefined
+        if (bp && Array.isArray(bp.servers) && bp.servers.length > 0) {
+          const servers = bp.servers.filter((s) => s && typeof s.host === 'string') as BlossomServer[]
+          if (servers.length > 0) {
+            const selectedHost = servers.some((s) => s.host === bp.selectedHost) ? bp.selectedHost! : servers[0]!.host
+            setBlossom({ enabled: bp.enabled === true, servers, selectedHost })
+          }
+        }
       } catch (e) {
         console.error('[settings] failed to load vault settings:', e)
       }
@@ -321,6 +363,51 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     } finally {
       setRelaySyncing(false)
     }
+  }
+
+  const saveBlossom = async (next: BlossomPrefs, statusMsg: string) => {
+    setBlossom(next)
+    try {
+      const settings = await window.nvelope.vault.getSettings(identityId)
+      await window.nvelope.vault.updateSettings(identityId, {
+        ...settings,
+        preferences: { ...((settings.preferences ?? {}) as Record<string, unknown>), blossom: next },
+      })
+      setBlossomStatus(statusMsg)
+    } catch (e) {
+      setBlossomStatus('Save failed: ' + String(e))
+    }
+    setTimeout(() => setBlossomStatus(''), 4000)
+  }
+
+  const handleAddBlossomServer = () => {
+    const name = blossomNameInput.trim()
+    const host = blossomHostInput.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host)) {
+      setBlossomStatus('Hostname must be a domain like blossom.example.com (the https:// prefix is optional)')
+      setTimeout(() => setBlossomStatus(''), 5000)
+      return
+    }
+    if (blossom.servers.some((s) => s.host === host)) {
+      setBlossomStatus('Server already in list')
+      setTimeout(() => setBlossomStatus(''), 4000)
+      return
+    }
+    setBlossomNameInput('')
+    setBlossomHostInput('')
+    void saveBlossom(
+      { ...blossom, servers: [...blossom.servers, { name, host }], selectedHost: blossom.selectedHost || host },
+      'Server added',
+    )
+  }
+
+  const handleRemoveBlossomServer = (host: string) => {
+    const server = blossom.servers.find((s) => s.host === host)
+    if (!server) return
+    if (!confirm(`Remove Blossom server "${blossomLabel(server)}"?`)) return
+    const servers = blossom.servers.filter((s) => s.host !== host)
+    const selectedHost = blossom.selectedHost === host ? (servers[0]?.host ?? '') : blossom.selectedHost
+    void saveBlossom({ ...blossom, servers, selectedHost }, 'Server removed')
   }
 
   const handleSavePolicy = async () => {
@@ -507,6 +594,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     { id: 'relays', label: 'Relays' },
     { id: 'policy', label: 'Mail Policy' },
     { id: 'subscriptions', label: 'Subscriptions' },
+    { id: 'media', label: 'Media & Upload' },
     { id: 'cache', label: 'Cache & Data' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
@@ -946,6 +1034,88 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                   </button>
                 )}
                 {subStatus && <p className="text-xs text-emerald-400">{subStatus}</p>}
+              </div>
+            )}
+
+            {section === 'media' && (
+              <div className="space-y-5">
+                <div>
+                  <label className="mb-2 flex items-center gap-2 text-sm text-neutral-200">
+                    <input
+                      type="checkbox"
+                      checked={blossom.enabled}
+                      onChange={(e) => void saveBlossom({ ...blossom, enabled: e.target.checked }, e.target.checked ? 'Blossom uploads enabled' : 'Blossom uploads disabled')}
+                      className="h-4 w-4 rounded border-neutral-600 bg-neutral-800 accent-blue-600"
+                    />
+                    Enable Blossom uploads
+                  </label>
+                  <p className="text-xs text-neutral-500">
+                    Blossom servers host files so they can be attached to mail as external links. Uploads are signed with the sending account&apos;s key (BUD-02).
+                  </p>
+                </div>
+                <div className={blossom.enabled ? 'space-y-4' : 'space-y-4 opacity-40 pointer-events-none'}>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-neutral-500">Blossom Services</label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={blossom.selectedHost}
+                        onChange={(e) => void saveBlossom({ ...blossom, selectedHost: e.target.value }, 'Upload server selected')}
+                        disabled={!blossom.enabled}
+                        className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm outline-none focus:border-blue-500"
+                      >
+                        {blossom.servers.map((s) => (
+                          <option key={s.host} value={s.host}>{blossomLabel(s)}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handleRemoveBlossomServer(blossom.selectedHost)}
+                        disabled={!blossom.enabled || blossom.servers.length <= 1}
+                        title="Remove this server"
+                        className="shrink-0 rounded-md p-1.5 text-neutral-500 hover:text-red-400 hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                      >
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                    <p className="mt-1.5 text-xs text-neutral-500">
+                      The selected server is used for uploads in the compose window.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-neutral-500">Add a server</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Name (optional)"
+                        value={blossomNameInput}
+                        onChange={(e) => setBlossomNameInput(e.target.value)}
+                        disabled={!blossom.enabled}
+                        className="w-40 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+                      />
+                      <input
+                        type="text"
+                        placeholder="blossom.example.com"
+                        value={blossomHostInput}
+                        onChange={(e) => setBlossomHostInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleAddBlossomServer() }}
+                        disabled={!blossom.enabled}
+                        className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+                      />
+                      <button
+                        onClick={handleAddBlossomServer}
+                        disabled={!blossom.enabled || !blossomHostInput.trim()}
+                        className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50 transition-colors"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    <p className="mt-1.5 text-xs text-neutral-500">
+                      Hostname only — https is always used and any https:// prefix is stripped.
+                    </p>
+                  </div>
+                </div>
+                {blossomStatus && <p className="text-xs text-emerald-400">{blossomStatus}</p>}
               </div>
             )}
 
