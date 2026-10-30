@@ -99,7 +99,7 @@ async function publishProfileToRelays(
     about?: string
   },
   relays: string[],
-  options?: { skipKind0?: boolean; policies?: PolicyPreferences; benchmarkHashesPerMinute?: number },
+  options?: { skipKind0?: boolean; skipPolicy?: boolean; policies?: PolicyPreferences; benchmarkHashesPerMinute?: number },
 ): Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[]; certEvent?: NostrEvent; policyEvent?: NostrEvent }> {
   const secretKey = decodeNsec(account.nsec)
   const errors: string[] = []
@@ -142,7 +142,9 @@ async function publishProfileToRelays(
     }
 
     // Publish kind 30998 recipient policy event (d-tag "nv_recipient_profile"),
-    // built from the identity's policy preferences (wizard sliders / Settings → Mail Policy)
+    // built from the identity's policy preferences (wizard sliders / Settings → Mail Policy).
+    // Skipped for imported accounts — clobbering an existing policy is not ours to do.
+    if (!options?.skipPolicy) {
     const policyContent = buildRecipientPolicyJson(options?.policies, options?.benchmarkHashesPerMinute)
     const policyEvent = finalizeEvent(
       {
@@ -163,6 +165,7 @@ async function publishProfileToRelays(
       polResult.details.forEach((d) => {
         if (!d.ok) errors.push(`  ${d.url}: ${d.reason}`)
       })
+    }
     }
 
     // Publish kind 0 profile event (skipped for imported accounts — we only carry
@@ -221,7 +224,7 @@ async function publishProfileToRelays(
 
 export function registerSendHandlers(): void {
   // Publish kind 30998 certificate + policy (+ kind 0 profile unless skipKind0)
-  ipcMain.handle('profile:publish', async (_event, identityId: string, accountId: string, options?: { skipKind0?: boolean }) => {
+  ipcMain.handle('profile:publish', async (_event, identityId: string, accountId: string, options?: { skipKind0?: boolean; skipPolicy?: boolean }) => {
     const session = getUnlockedSession(identityId)
     if (!session) throw new Error('Identity is locked')
 
@@ -250,6 +253,22 @@ export function registerSendHandlers(): void {
       throw new Error('Failed to publish on all relays:\n' + result.errors.join('\n'))
     }
     return result
+  })
+
+  // Fetch the published kind-30998 mail certificate (d-tag nv_public_key) for a
+  // pubkey. Runs without an unlocked identity — the import wizard needs it to
+  // detect an existing certificate before the identity exists.
+  ipcMain.handle('profile:fetchCert', async (_event, pubkeyHex: string, relays?: string[]) => {
+    const relayList = Array.isArray(relays) && relays.length > 0 ? relays : DEFAULT_RELAYS
+    const pool = new SimplePool()
+    try {
+      const events = await pool.querySync(relayList, { kinds: [30998], authors: [pubkeyHex], '#d': ['nv_public_key'] })
+      const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
+      if (!newest || !newest.content) return null
+      return { certificate: newest.content, createdAt: newest.created_at }
+    } finally {
+      pool.close(relayList)
+    }
   })
 
   // Fetch a kind-0 profile (name/about/picture/nip05) for wizard account import.

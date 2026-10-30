@@ -191,6 +191,10 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
   const [keypairGenerated, setKeypairGenerated] = useState(false)
   const [importInput, setImportInput] = useState('')
   const [importPreview, setImportPreview] = useState<{ pubkey: string; name?: string; picture?: string; about?: string; relaySource?: 'nip65' | 'kind3' | 'defaults'; relayCount?: number } | null>(null)
+  // Imported accounts: a kind-30998 cert may already be published for the npub
+  const [publishedCert, setPublishedCert] = useState<string | null>(null)
+  const [certChecked, setCertChecked] = useState(false)
+  const [certMatchesPublished, setCertMatchesPublished] = useState(false)
 
   // Load benchmark from general client settings on mount (v2 = hash-only algorithm;
   // older benchmarks measured sign+hash and read ~60x too slow — treat as absent)
@@ -206,6 +210,17 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       setStoredBenchmarkLoaded(true)
     }).catch(() => setStoredBenchmarkLoaded(true))
   }, [])
+
+  // Imported accounts: check the relays for an already-published mail
+  // certificate so the wizard can require the matching private key instead of
+  // silently clobbering it.
+  useEffect(() => {
+    if (screen !== 'certificate' || data.accountType !== 'existing' || certChecked) return
+    setCertChecked(true)
+    window.nvelope.profile.fetchCert(data.pubkey, data.relays)
+      .then((res) => setPublishedCert(res?.certificate ?? null))
+      .catch(() => setPublishedCert(null))
+  }, [screen, data.accountType, data.pubkey, data.relays, certChecked])
 
   const update = useCallback(<K extends keyof WizardData>(key: K, value: WizardData[K]) => {
     setData((d) => ({ ...d, [key]: value }))
@@ -323,15 +338,26 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       about: importPreview.about ?? '',
     })
     setKeypairGenerated(true)
-    setScreen('policies')
+    // Imported accounts skip the policy screen — an existing npub may already
+    // have a published recipient policy, and we must not clobber it
+    setScreen(data.accountType === 'existing' ? 'certificate' : 'policies')
   }
 
   const generateCert = async () => {
     setWorking(true)
     setError('')
     try {
+      if (publishedCert && !certMatchesPublished) {
+        const overwrite = confirm(
+          'A public key certificate is already published for this account.\n\n' +
+            'Overwrite the published certificate with a newly generated key? ' +
+            'Without the matching private key you cannot decrypt mail encrypted to the published certificate.'
+        )
+        if (!overwrite) return
+      }
       const cert = await window.nvelope.cert.generate(data.cert.keySize)
       update('cert', { ...data.cert, privateKeyPem: cert.privateKeyPem, publicKeyDerBase64: cert.publicKeyDerBase64 })
+      setCertMatchesPublished(false)
     } catch (e) {
       setError('Certificate generation failed: ' + String(e))
     } finally {
@@ -345,7 +371,24 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       const result = await window.nvelope.file.openPemFile()
       if (result.canceled) return
       const derived = await window.nvelope.cert.derivePublic(result.content)
-      update('cert', { ...data.cert, privateKeyPem: result.content, publicKeyDerBase64: derived.publicKeyDerBase64 })
+      if (publishedCert) {
+        if (derived.publicKeyDerBase64 === publishedCert) {
+          update('cert', { ...data.cert, privateKeyPem: result.content, publicKeyDerBase64: derived.publicKeyDerBase64 })
+          setCertMatchesPublished(true)
+        } else {
+          const overwrite = confirm(
+            'The imported private key does NOT match the public key certificate published for this account.\n\n' +
+              'OK = overwrite the published certificate with this new key\n' +
+              'Cancel = do nothing'
+          )
+          if (!overwrite) return
+          update('cert', { ...data.cert, privateKeyPem: result.content, publicKeyDerBase64: derived.publicKeyDerBase64 })
+          setCertMatchesPublished(false)
+        }
+      } else {
+        update('cert', { ...data.cert, privateKeyPem: result.content, publicKeyDerBase64: derived.publicKeyDerBase64 })
+        setCertMatchesPublished(false)
+      }
     } catch (e) {
       setError('Failed to import certificate: ' + String(e))
     }
@@ -429,17 +472,22 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         },
       })
 
-      // Publish kind 30998 certificate + policy to relays. Imported accounts skip
-      // the kind-0 profile publish — we only carry name/about/picture and would
-      // clobber their existing full Nostr profile.
+      // Imported accounts whose imported private key matched the published
+      // certificate skip publishing entirely — the existing cert and policy stay
+      // untouched. Other imported accounts publish the cert only (skip kind 0
+      // AND the recipient policy — we must not clobber an existing policy).
+      const keepExistingCert = data.accountType === 'existing' && certMatchesPublished
+      if (!keepExistingCert) {
       try {
         const pubResult = await window.nvelope.profile.publish(identity.id, data.pubkey, {
           skipKind0: data.accountType === 'existing',
+          skipPolicy: data.accountType === 'existing',
         })
         console.log('[onboarding] Profile published:', pubResult)
       } catch (publishErr) {
         console.warn('[onboarding] Profile publish failed:', publishErr)
         // Don't block onboarding if publish fails — user can retry later via Inbox
+      }
       }
 
       // Publish the NIP-65 kind-10002 relay list: always for new accounts; for
@@ -486,7 +534,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       setError('Failed to finalize: ' + String(e))
       setWorking(false)
     }
-  }, [data, onComplete])
+  }, [data, onComplete, certMatchesPublished])
 
   // ----------------------------------------------------------------
   // Step indicator navigation: allow clicking completed steps
@@ -502,6 +550,22 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       case 2: setScreen('accountChoice'); break
       case 3: setScreen(data.accountType === 'existing' ? 'certificate' : 'network'); break
       case 4: setScreen('review'); break
+    }
+  }
+
+  const requestClose = () => {
+    if (confirm('Exit identity setup? Your progress will not be saved.')) onClose()
+  }
+
+  // Import an exported .vault backup as a new identity, then back to login
+  const handleImportIdentity = async () => {
+    setError('')
+    try {
+      const result = await window.nvelope.vault.importIdentity()
+      if (result.canceled) return
+      onClose()
+    } catch (e) {
+      setError('Import failed: ' + String(e).replace(/^Error: (Error invoking remote method '[^']+': )?(Error: )?/, ''))
     }
   }
 
@@ -544,6 +608,13 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
           Next
         </button>
       </div>
+      <button
+        onClick={handleImportIdentity}
+        className="text-sm text-blue-400 underline decoration-dotted hover:text-blue-300"
+      >
+        Import an identity from a backup (.vault)
+      </button>
+      {error && <p className="text-sm text-red-400">{error}</p>}
     </div>
   )
 
@@ -1008,6 +1079,18 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         </div>
       )}
 
+      {data.accountType === 'existing' && certChecked && publishedCert && (
+        certMatchesPublished ? (
+          <p className="rounded border border-green-800 bg-green-900/20 p-2 text-xs text-green-400">
+            The imported private key matches the certificate published for this account — the existing certificate will be kept and nothing will be re-published.
+          </p>
+        ) : (
+          <p className="rounded border border-amber-800 bg-amber-900/20 p-2 text-xs text-amber-300">
+            A public key certificate is already published for this account. Import the matching private key (.pem) to keep using it, or generate/import a new key to overwrite the published certificate.
+          </p>
+        )
+      )}
+
       {error && <p className="text-sm text-red-400">{error}</p>}
 
       <div className="flex gap-3">
@@ -1027,7 +1110,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       </div>
 
       <NavButtons
-        onBack={() => setScreen('policies')}
+        onBack={() => setScreen(data.accountType === 'existing' ? 'accountImport' : 'policies')}
         onNext={() => {
           if (!data.cert.privateKeyPem) {
             setError('Please generate or import a certificate first')
@@ -1133,14 +1216,18 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
           <span className="text-neutral-400">Certificate:</span>{' '}
           <span className="text-neutral-200">{data.cert.keySize}-bit</span>
         </div>
-        <div>
-          <span className="text-neutral-400">Contact Policy:</span>{' '}
-          <span className="text-neutral-200">{data.policies.contactsMinutes} min</span>
-        </div>
-        <div>
-          <span className="text-neutral-400">Non-Contact Policy:</span>{' '}
-          <span className="text-neutral-200">{data.policies.nonContactsMinutes} min</span>
-        </div>
+        {data.accountType !== 'existing' && (
+          <>
+            <div>
+              <span className="text-neutral-400">Contact Policy:</span>{' '}
+              <span className="text-neutral-200">{data.policies.contactsMinutes} min</span>
+            </div>
+            <div>
+              <span className="text-neutral-400">Non-Contact Policy:</span>{' '}
+              <span className="text-neutral-200">{data.policies.nonContactsMinutes} min</span>
+            </div>
+          </>
+        )}
         <div>
           <span className="text-neutral-400">Relays:</span>{' '}
           <span className="text-neutral-200">
@@ -1176,6 +1263,19 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
   return (
     <div className="flex h-screen items-center justify-center bg-neutral-900 px-4">
       <div className="w-full max-w-lg rounded-lg border border-neutral-700 bg-neutral-800 p-6 shadow-xl">
+        {screen !== 'welcome' && (
+          <div className="-mt-2 -mr-2 mb-1 flex justify-end">
+            <button
+              onClick={requestClose}
+              title="Cancel setup"
+              className="rounded p-1 text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300 transition-colors"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
         {screen === 'welcome' && renderWelcome()}
         {screen === 'benchmark' && renderBenchmark()}
         {screen === 'identity' && renderIdentity()}

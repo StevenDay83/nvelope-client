@@ -269,4 +269,44 @@ export function registerVaultHandlers(): void {
     fs.copyFileSync(vaultPath, result.filePath)
     return { canceled: false, path: result.filePath }
   })
+
+  // Import an exported .vault backup as a NEW identity (fresh id, no session —
+  // the user unlocks it with the backup's passphrase from the login screen).
+  ipcMain.handle('vault:importIdentity', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [
+        { name: 'nVelope vault', extensions: ['vault'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+    const src = result.filePaths[0]!
+
+    let envelope: { salt?: string; iv?: string; ciphertext?: string; tag?: string }
+    try {
+      envelope = JSON.parse(fs.readFileSync(src, 'utf-8'))
+    } catch {
+      throw new Error('Not a valid nVelope vault file (unreadable JSON)')
+    }
+    if (!envelope.salt || !envelope.iv || !envelope.ciphertext || !envelope.tag) {
+      throw new Error('Not a valid nVelope vault file (missing encryption envelope)')
+    }
+
+    ensureVaultDir()
+    const id = crypto.randomUUID()
+    fs.copyFileSync(src, path.join(VAULT_DIR, `${id}.vault`))
+
+    const base = path.basename(src)
+      .replace(/\.vault$/i, '')
+      .replace(/^nvelope-/i, '')
+      .replace(/[-_]+/g, ' ')
+      .trim()
+    let name = base || 'Imported identity'
+    const identities = getIdentities()
+    if (identities.some((i) => i.name.toLowerCase() === name.toLowerCase())) name = `${name} (imported)`
+    identities.push({ id, name, createdAt: Date.now() })
+    saveIdentities(identities)
+    return { canceled: false, id, name }
+  })
 }

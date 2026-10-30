@@ -165,7 +165,11 @@ export default function App() {
     return (
       <OnboardingWizard
         onComplete={handleOnboardComplete}
-        onClose={() => setView('unlock')}
+        onClose={() => {
+          // The wizard can import a .vault backup — refresh the list on the way out
+          window.nvelope.vault.listIdentities().then(setIdentities).catch(() => {})
+          setView('unlock')
+        }}
       />
     )
   }

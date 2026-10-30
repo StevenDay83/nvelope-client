@@ -628,7 +628,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
         </div>
 
         {/* Content */}
-        <div className="flex flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between border-b border-neutral-700/50 px-5 py-3">
             <h3 className="text-sm font-semibold">{sections.find((s) => s.id === section)?.label}</h3>
             <button
@@ -808,20 +808,20 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                   return (
                     <div key={account.pubkey} className="space-y-2 rounded-md border border-neutral-700/50 bg-neutral-800/30 p-3">
                       <div className="flex items-baseline justify-between gap-2">
-                        <p className="text-sm font-medium text-neutral-200">
+                        <p className="min-w-0 break-words text-sm font-medium text-neutral-200">
                           {account.displayName || formatNpub(account.pubkey)}
                         </p>
-                        <p className="font-mono text-xs text-neutral-500" title={npubEncode(account.pubkey)}>
+                        <p className="shrink-0 font-mono text-xs text-neutral-500" title={npubEncode(account.pubkey)}>
                           {formatNpub(account.pubkey)}
                         </p>
                       </div>
                       <div className="space-y-1">
                         {list.map((relay, i) => (
-                          <div key={relay} className="flex items-center justify-between rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-1.5">
-                            <span className="text-sm text-neutral-200">{relay}</span>
+                          <div key={relay} className="flex items-center justify-between gap-2 rounded-md border border-neutral-700/50 bg-neutral-800/50 px-3 py-1.5">
+                            <span className="min-w-0 break-all text-sm text-neutral-200">{relay}</span>
                             <button
                               onClick={() => setRelaysPerAccount((prev) => ({ ...prev, [account.pubkey]: list.filter((_, idx) => idx !== i) }))}
-                              className="text-xs text-neutral-500 hover:text-red-400 transition-colors"
+                              className="shrink-0 text-xs text-neutral-500 hover:text-red-400 transition-colors"
                             >
                               Remove
                             </button>

@@ -300,6 +300,40 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     return toList.length > 1 ? `${label} +${toList.length - 1}` : label
   }
 
+  // Every recipient hex from the inner message
+  const getRecipientHexList = (mail: MailRecord): string[] => {
+    let toList: string[] = []
+    try {
+      const data = JSON.parse(mail.messageData)
+      if (Array.isArray(data.mailToList)) toList = data.mailToList.filter((x: unknown) => typeof x === 'string' && x.length === 64)
+    } catch { /* fall back to recipientPubkey */ }
+    if (toList.length === 0 && mail.recipientPubkey) toList = [mail.recipientPubkey]
+    return toList
+  }
+
+  const recipientLabel = (hex: string): string => {
+    if (hex === selectedAccount) return 'You'
+    const contact = contactsByPubkey[hex]
+    return contact ? contactLabel(contact, hex) : formatNpub(hex)
+  }
+
+  // Full "To:" header line — every recipient, not just the first
+  const getToLine = (mail: MailRecord): string => {
+    const list = getRecipientHexList(mail)
+    if (list.length === 0) return '(no recipient)'
+    return list.map(recipientLabel).join(', ')
+  }
+
+  // Reply-all targets: original sender + all original recipients, minus yourself.
+  // Only meaningful for direct mail sent to multiple recipients.
+  const getReplyAllTargets = (mail: MailRecord): string[] | null => {
+    if (mail.isBroadcast) return null
+    const toList = getRecipientHexList(mail)
+    if (toList.length <= 1) return null
+    const targets = [...new Set([mail.senderPubkey, ...toList])].filter((pk) => pk && pk !== selectedAccount && pk !== 'nvelope')
+    return targets.length > 0 ? targets : null
+  }
+
   // Sent/Outbox rows show the recipient; everything else shows the sender.
   // Broadcasts have no recipients (mailToList is empty) — always show the author.
   const getRowDisplay = (mail: MailRecord): string => {
@@ -435,6 +469,33 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       subject: fwdSubject,
       body: fwdBody,
       format: 'plaintext',
+    })
+  }
+
+  const handleReplyAll = (mail: MailRecord) => {
+    const targets = getReplyAllTargets(mail)
+    if (!targets) return
+    const acct = accounts.find((a) => a.pubkey === selectedAccount)
+    const replySubject = mail.subject?.startsWith('Re:') ? mail.subject : `Re: ${mail.subject || '(no subject)'}`
+    let replyBody = ''
+    try {
+      const data = JSON.parse(mail.messageData)
+      const originalBody = data.bodyText || ''
+      replyBody = `\n\n--- On ${formatDateFull(mail.createdAt)}, ${getSenderDisplay(mail)} wrote ---\n${originalBody}`
+    } catch {
+      replyBody = '\n\n--- Original message ---\n'
+    }
+    window.nvelope.compose.open({
+      identityId,
+      accountId: selectedAccount,
+      accountDisplayName: acct?.displayName || undefined,
+      accountNpub: acct ? npubEncode(acct.pubkey) : undefined,
+      recipientNpub: targets.map((pk) => npubEncode(pk)).join('; '),
+      subject: replySubject,
+      body: replyBody,
+      format: 'plaintext',
+      // SPEC §3.1: replies propagate the thread key unchanged
+      threadId: mail.threadId || mail.innerEventId,
     })
   }
 
@@ -1000,6 +1061,12 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                   <span className="text-xs">Reply</span>
                 </ActionButton>
+                {getReplyAllTargets(selectedMail) && (
+                  <ActionButton onClick={() => handleReplyAll(selectedMail)} title="Reply all">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 10h9a8 8 0 018 8v2M4 10l5 5m-5-5l5-5m3 5l-4 4m4-4l-4-4" /></svg>
+                    <span className="text-xs">Reply All</span>
+                  </ActionButton>
+                )}
                 <ActionButton onClick={() => handleForward(selectedMail)} title="Forward">
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
                   <span className="text-xs">Forward</span>
@@ -1099,6 +1166,21 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                           </button>
                           {expanded && (
                             <div className="border-t border-neutral-800 p-4">
+                              <div className="mb-2 space-y-0.5 text-xs text-neutral-500">
+                                <div className="break-words">
+                                  <span className="text-neutral-600">From:</span>{' '}
+                                  {senderName}
+                                  {!isSelf && m.senderPubkey !== 'nvelope' && (
+                                    <span className="font-mono text-neutral-600">{' '}&lt;{formatNpub(m.senderPubkey)}&gt;</span>
+                                  )}
+                                </div>
+                                {!m.isBroadcast && (
+                                  <div className="break-words">
+                                    <span className="text-neutral-600">To:</span>{' '}
+                                    {getToLine(m)}
+                                  </div>
+                                )}
+                              </div>
                               <div className="mb-3 flex items-center gap-1">
                                 <button
                                   onClick={() => handleReply(m)}
@@ -1107,6 +1189,15 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                                   <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                                   Reply
                                 </button>
+                                {getReplyAllTargets(m) && (
+                                  <button
+                                    onClick={() => handleReplyAll(m)}
+                                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200 transition-colors"
+                                  >
+                                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 10h9a8 8 0 018 8v2M4 10l5 5m-5-5l5-5m3 5l-4 4m4-4l-4-4" /></svg>
+                                    Reply All
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => handleForward(m)}
                                   className="flex items-center gap-1 rounded px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200 transition-colors"
@@ -1148,14 +1239,14 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                             </button>
                           )}
                         </div>
-                        <div className="text-xs text-neutral-500 mt-0.5">
+                        <div className="text-xs text-neutral-500 mt-0.5 break-words">
                           <span className="text-neutral-600">To:</span>{' '}
-                          {selectedMail.senderPubkey === selectedAccount
-                            ? getRecipientsDisplay(selectedMail)
-                            : (() => {
+                          {selectedMail.isBroadcast
+                            ? (() => {
                                 const acct = accounts.find((a) => a.pubkey === selectedAccount)
                                 return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
-                              })()}
+                              })()
+                            : getToLine(selectedMail)}
                         </div>
                         <div className="text-xs text-neutral-500 mt-0.5">
                           {formatDateFull(selectedMail.createdAt)}

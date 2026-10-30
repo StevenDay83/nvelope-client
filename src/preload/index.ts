@@ -31,6 +31,7 @@ export interface VaultAPI {
   getSettings: (identityId: string) => Promise<IdentitySettings>
   listAccounts: (identityId: string) => Promise<AccountData[]>
   exportVault: (identityId: string) => Promise<{ canceled: boolean; path?: string }>
+  importIdentity: () => Promise<{ canceled: boolean; id?: string; name?: string }>
 }
 
 export interface ContactRecord {
@@ -181,8 +182,9 @@ export interface OutboxAPI {
 }
 
 export interface ProfileAPI {
-  publish: (identityId: string, accountId: string, options?: { skipKind0?: boolean }) => Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[] }>
+  publish: (identityId: string, accountId: string, options?: { skipKind0?: boolean; skipPolicy?: boolean }) => Promise<{ certificateEventId?: string; profileEventId?: string; errors: string[] }>
   fetchMetadata: (pubkey: string, relays?: string[]) => Promise<{ name?: string; about?: string; picture?: string; nip05?: string } | null>
+  fetchCert: (pubkey: string, relays?: string[]) => Promise<{ certificate: string; createdAt: number } | null>
 }
 
 export interface ComposeAPI {
@@ -253,6 +255,7 @@ const vaultAPI: VaultAPI = {
   getSettings: (identityId) => ipcRenderer.invoke('vault:getSettings', identityId),
   listAccounts: (identityId) => ipcRenderer.invoke('vault:listAccounts', identityId),
   exportVault: (identityId) => ipcRenderer.invoke('vault:exportVault', identityId),
+  importIdentity: () => ipcRenderer.invoke('vault:importIdentity'),
 }
 
 const dbAPI: DbAPI = {
@@ -346,6 +349,7 @@ const outboxAPI: OutboxAPI = {
 const profileAPI: ProfileAPI = {
   publish: (identityId, accountId, options) => ipcRenderer.invoke('profile:publish', identityId, accountId, options),
   fetchMetadata: (pubkey, relays) => ipcRenderer.invoke('profile:fetchMetadata', pubkey, relays),
+  fetchCert: (pubkey, relays) => ipcRenderer.invoke('profile:fetchCert', pubkey, relays),
 }
 
 const composeAPI: ComposeAPI = {
