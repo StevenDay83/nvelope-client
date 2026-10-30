@@ -2,20 +2,31 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { decode } from 'nostr-tools/nip19'
 import { SimplePool } from 'nostr-tools'
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 import {
-  NvelopeClient,
   DirectMessage,
   NostrToolsTransport,
-  NsecSigner,
   createDirectMessageEvent,
+  fetchCertificate,
   fetchRecipientPolicy,
   difficultyFromTarget,
+  buildUnsignedEvent,
+  finalizeWithNsec,
+  encryptEnvelope,
+  envelopeMeetsPow,
+  TARGET_NO_CONSTRAINT,
+  NVELOPE_EVENT_KIND,
+  LABEL_TAG,
+  LABEL_DIRECT_MESSAGE,
+  nowSeconds,
+  type NostrEvent,
 } from 'nvelope-core'
 import { getUnlockedSession } from '../ipc/vaultHandlers'
 import { getDb } from '../ipc/dbHandlers'
 import { getBenchmarkHashesPerMinute } from '../clientSettings'
 import { CachingTransport } from '../relay/cachingTransport'
 import { getRelaysForAccount } from '../relay/relayPrefs'
+import { mineEnvelopePow, getMiningWorkerCount, type PowTemplate } from '../pow/miner'
 import * as dao from '../db/dao'
 
 const MAX_EXTERNAL_REFERENCES = 10
@@ -124,7 +135,7 @@ async function pump(identityId: string): Promise<void> {
     for (const row of queued) {
       // Session may have locked mid-queue
       if (!getUnlockedSession(identityId)) return
-      await processRow(identityId, account.pubkey, account.nsec, account.certificatePrivateKeyPem, account.certificatePublicKeyDerBase64, row, session.payload.settings as Record<string, unknown>)
+      await processRow(identityId, account.pubkey, account.nsec, row, session.payload.settings as Record<string, unknown>)
     }
   }
 }
@@ -133,8 +144,6 @@ async function processRow(
   identityId: string,
   accountId: string,
   nsec: string,
-  certificatePrivateKeyPem: string,
-  certificatePublicKeyDerBase64: string,
   row: dao.MailRecord,
   settings: Record<string, unknown>,
 ): Promise<void> {
@@ -166,62 +175,89 @@ async function processRow(
       new NostrToolsTransport({ pool: new SimplePool(), maxWaitMs: 15000 }),
       db,
     )
-    const client = new NvelopeClient({
-      transport,
-      signer: new NsecSigner(secretKey),
-      relays,
-      certificatePrivateKeyPem,
-      certificatePublicKeyDerBase64,
-    })
 
-    // Pre-resolve per-recipient PoW difficulty for progress display.
-    // CachingTransport means sendDirectMail's own resolution hits the cache.
     const hpm = getBenchmarkHashesPerMinute() ?? 0
-    const recipientHexes = payload.recipients.map(npubToHex)
-    const bitsPerRecipient: number[] = []
-    for (const hex of recipientHexes) {
-      let bits = 0
+    const miningWorkers = getMiningWorkerCount()
+
+    // Resolve each recipient's certificate and PoW target once
+    // (CachingTransport serves repeat fetches from the local cache).
+    interface ResolvedRecipient {
+      certPem: string
+      target: string
+      bits: number
+    }
+    const resolved = new Map<string, ResolvedRecipient>()
+    const resolveRecipient = async (hex: string): Promise<ResolvedRecipient> => {
+      const cached = resolved.get(hex)
+      if (cached) return cached
+      let certificate
       try {
-        const policy = await fetchRecipientPolicy(transport, hex, relays)
-        const decision = policy?.evaluate(accountId, false)
-        if (decision && decision.allowed) {
-          const difficulty = difficultyFromTarget(decision.target)
-          bits = difficulty > 1n ? difficulty.toString(2).length - 1 : 0
-        }
+        certificate = await fetchCertificate(transport, hex, relays)
       } catch (e) {
-        console.warn('[outbox] policy estimate failed for', hex.slice(0, 16), e)
+        throw new Error(`Recipient ${hex} published an invalid mail certificate: ${e instanceof Error ? e.message : String(e)}`)
       }
-      bitsPerRecipient.push(bits)
+      if (!certificate) throw new Error(`Recipient ${hex} has not published a mail certificate`)
+      let policy
+      try {
+        policy = await fetchRecipientPolicy(transport, hex, relays)
+      } catch (e) {
+        throw new Error(`Recipient ${hex} published an invalid recipient policy: ${e instanceof Error ? e.message : String(e)}`)
+      }
+      const decision = policy
+        ? policy.evaluate(accountId, false)
+        : { allowed: true as const, target: TARGET_NO_CONSTRAINT, source: 'none' as const }
+      if (!decision.allowed) throw new Error(`Recipient ${hex} denies mail from you (${decision.reason})`)
+      const difficulty = difficultyFromTarget(decision.target)
+      const bits = difficulty > 1n ? difficulty.toString(2).length - 1 : 0
+      const entry: ResolvedRecipient = { certPem: certificate.pem, target: decision.target, bits }
+      resolved.set(hex, entry)
+      return entry
     }
 
     const message = buildMessage(payload, accountId)
+    const wireMessages = message.getWireMessages()
+    for (const { recipient } of wireMessages) await resolveRecipient(recipient)
 
-    // The attempts counter resets per recipient — infer the switch
-    let recipientIndex = 0
-    let lastAttempts = 0
-    let announced = false
-    const results = await client.sendDirectMail(message, {
-      signal: controller.signal,
-      onProgress: (attempts: number) => {
-        if (attempts < lastAttempts) {
-          recipientIndex++
-          announced = false
-        }
-        lastAttempts = attempts
-        if (!announced) {
-          announced = true
-          const bits = bitsPerRecipient[recipientIndex] ?? 0
-          emit({
-            phase: 'mining',
-            recipientIndex,
-            recipientCount: recipientHexes.length,
-            bits,
-            etaMinutes: hpm > 0 && bits > 0 ? Math.round((2 ** bits / hpm) * 10) / 10 : null,
-          })
-        }
-        emit({ phase: 'mining', recipientIndex, recipientCount: recipientHexes.length, attempts })
-      },
-    })
+    const innerCache = new Map<string, NostrEvent>()
+    const results: { recipient: string; event: NostrEvent }[] = []
+    for (let i = 0; i < wireMessages.length; i++) {
+      const { recipient, message: wire } = wireMessages[i]
+      const { certPem, target, bits } = resolved.get(recipient)!
+      emit({
+        phase: 'mining',
+        recipientIndex: i,
+        recipientCount: wireMessages.length,
+        bits,
+        etaMinutes: hpm > 0 && bits > 0 ? Math.round((2 ** bits / (hpm * miningWorkers)) * 10) / 10 : null,
+      })
+
+      const wireJson = JSON.stringify(wire)
+      let inner = innerCache.get(wireJson)
+      if (!inner) {
+        inner = finalizeWithNsec(buildUnsignedEvent({ content: wireJson }), secretKey)
+        innerCache.set(wireJson, inner)
+      }
+
+      const throwaway = generateSecretKey()
+      const template: PowTemplate = {
+        kind: NVELOPE_EVENT_KIND,
+        created_at: nowSeconds(),
+        pubkey: getPublicKey(throwaway),
+        tags: [[LABEL_TAG, LABEL_DIRECT_MESSAGE]],
+        content: JSON.stringify(encryptEnvelope(JSON.stringify(inner), certPem)),
+      }
+      const unsigned = await mineEnvelopePow(template, target, {
+        signal: controller.signal,
+        onProgress: (attempts) =>
+          emit({ phase: 'mining', recipientIndex: i, recipientCount: wireMessages.length, attempts }),
+      })
+      const envelope = finalizeWithNsec(unsigned, throwaway)
+      if (!envelopeMeetsPow(envelope, target)) {
+        throw new Error('Signed envelope does not satisfy the PoW target')
+      }
+      await transport.publish(envelope, relays)
+      results.push({ recipient, event: envelope })
+    }
 
     const current = db.prepare('SELECT state FROM mail WHERE innerEventId = ?').get(innerEventId) as { state: string } | undefined
     if (!current || current.state === 'deleted') {
@@ -231,7 +267,7 @@ async function processRow(
     const sentFolder = dao.getSpecialFolder(db, accountId, 'sent')
     dao.markMailSent(db, innerEventId, sentFolder?.id ?? null, results[0]?.event.id ?? '')
     emit({ phase: 'sent' })
-    console.log(`[outbox] sent ${innerEventId.slice(0, 16)}... to ${recipientHexes.length} recipient(s)`)
+    console.log(`[outbox] sent ${innerEventId.slice(0, 16)}... to ${wireMessages.length} recipient(s)`)
   } catch (e) {
     const isAbort = e instanceof Error && e.name === 'AbortError'
     const current = db.prepare('SELECT state FROM mail WHERE innerEventId = ?').get(innerEventId) as { state: string } | undefined
