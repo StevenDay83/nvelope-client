@@ -177,7 +177,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
     profile: { imageUrl: '', nickname: '', about: '' },
     nsec: '',
     pubkey: '',
-    policies: { contactsMinutes: 5, nonContactsMinutes: 30 },
+    policies: { contactsMinutes: 0.5, nonContactsMinutes: 2 },
     cert: { keySize: 4096, privateKeyPem: '', publicKeyDerBase64: '' },
     relays: [...DEFAULT_RELAYS],
     relaySource: null,
@@ -1220,11 +1220,11 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
           <>
             <div>
               <span className="text-neutral-400">Contact Policy:</span>{' '}
-              <span className="text-neutral-200">{data.policies.contactsMinutes} min</span>
+              <span className="text-neutral-200">{formatPolicyMinutes(data.policies.contactsMinutes)}</span>
             </div>
             <div>
               <span className="text-neutral-400">Non-Contact Policy:</span>{' '}
-              <span className="text-neutral-200">{data.policies.nonContactsMinutes} min</span>
+              <span className="text-neutral-200">{formatPolicyMinutes(data.policies.nonContactsMinutes)}</span>
             </div>
           </>
         )}
