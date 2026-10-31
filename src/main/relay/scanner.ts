@@ -84,6 +84,7 @@ async function storeDirectMail(
   const messageData = JSON.stringify({
     mailFrom: msg.getFrom(),
     mailToList: msg.getRecipientsTo(),
+    replyTo: msg.getReplyTo() || null,
     subjectLine: subject,
     messageType,
     formats,

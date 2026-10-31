@@ -13,6 +13,11 @@ function formatPolicyMinutes(m: number): string {
   return `${Math.floor(m)} min 30 sec`
 }
 
+// Welcome message sender: throwaway all-zeros pubkey (never a real signer).
+const WELCOME_SENDER_PUBKEY = '0'.repeat(64)
+// Official nVelope account — the welcome message's Reply-To address.
+const NVELOPE_REPLY_TO_HEX = '31844eb87bf5e0974a20287e37c5317d9115002b2b8ca06ceb8628e7764bdcab'
+
 // ------------------------------------------------------------------
 // Types
 // ------------------------------------------------------------------
@@ -502,7 +507,10 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         }
       }
 
-      // Inject welcome message
+      // Inject welcome message. Sender is a throwaway all-zeros pubkey (never
+      // a real signer); Reply-To points at the official nVelope account so
+      // users can actually respond (previously the pseudo-sender 'nvelope'
+      // crashed npubEncode on reply).
       const inbox = await window.nvelope.db.foldersGetSpecial(identity.id, data.pubkey, 'inbox')
       const inboxId = (inbox as { id: number } | null)?.id ?? null
       const welcomeId = 'welcome-' + Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -511,7 +519,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         accountId: data.pubkey,
         folderId: inboxId,
         state: 'received',
-        senderPubkey: 'nvelope',
+        senderPubkey: WELCOME_SENDER_PUBKEY,
         subject: 'Welcome to nVelope',
         threadId: welcomeId,
         isBroadcast: 0,
@@ -519,8 +527,9 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
         read: 0,
         marked: 0,
         messageData: JSON.stringify({
-          mailFrom: 'nvelope',
+          mailFrom: WELCOME_SENDER_PUBKEY,
           mailToList: [data.pubkey],
+          replyTo: NVELOPE_REPLY_TO_HEX,
           subjectLine: 'Welcome to nVelope',
           messageType: 0,
           formats: {

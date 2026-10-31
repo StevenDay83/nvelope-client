@@ -4,6 +4,14 @@ import SettingsPanel from './SettingsPanel'
 import MailBody from './MailBody'
 import type { ContactRecord, OutboxProgress } from '../../preload'
 
+// Welcome message pseudo-senders: the legacy 'nvelope' string (existing
+// databases) and the throwaway all-zeros pubkey (new installs).
+const NVELOPE_WELCOME_SENDERS = new Set(['nvelope', '0'.repeat(64)])
+const isNvelopeWelcomeSender = (pk: string | null | undefined): boolean =>
+  !!pk && NVELOPE_WELCOME_SENDERS.has(pk)
+// Official nVelope account — replies to the local welcome message land here.
+const NVELOPE_REPLY_TO_HEX = '31844eb87bf5e0974a20287e37c5317d9115002b2b8ca06ceb8628e7764bdcab'
+
 interface FolderRecord {
   id: number
   accountId: string
@@ -330,7 +338,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     if (mail.isBroadcast) return null
     const toList = getRecipientHexList(mail)
     if (toList.length <= 1) return null
-    const targets = [...new Set([mail.senderPubkey, ...toList])].filter((pk) => pk && pk !== selectedAccount && pk !== 'nvelope')
+    const targets = [...new Set([mail.senderPubkey, ...toList])].filter((pk) => pk && pk !== selectedAccount && !isNvelopeWelcomeSender(pk))
     return targets.length > 0 ? targets : null
   }
 
@@ -419,23 +427,25 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     const acct = accounts.find((a) => a.pubkey === selectedAccount)
     const replySubject = mail.subject?.startsWith('Re:') ? mail.subject : `Re: ${mail.subject || '(no subject)'}`
     let replyBody = ''
-    let broadcastReplyTo: string | null = null
+    let replyTo: string | null = null
     try {
       const data = JSON.parse(mail.messageData)
       const originalBody = data.bodyText || ''
       replyBody = `\n\n--- On ${formatDateFull(mail.createdAt)}, ${getSenderDisplay(mail)} wrote ---\n${originalBody}`
-      if (mail.isBroadcast && typeof data.replyTo === 'string' && data.replyTo) {
-        broadcastReplyTo = data.replyTo
+      if (typeof data.replyTo === 'string' && data.replyTo) {
+        replyTo = data.replyTo
       }
     } catch {
       replyBody = '\n\n--- Original message ---\n'
     }
     // Replying to your own Sent message replies to the original recipient.
-    // Broadcast replies go to the message's replyTo address when present,
-    // otherwise to the author's signing pubkey.
+    // Otherwise replyTo overrides the sender when present (SPEC); the local
+    // welcome message's throwaway sender falls back to the official account.
     const replyTargetHex = mail.isBroadcast
-      ? (broadcastReplyTo ?? mail.senderPubkey)
-      : mail.senderPubkey === selectedAccount ? mail.recipientPubkey : mail.senderPubkey
+      ? (replyTo ?? mail.senderPubkey)
+      : mail.senderPubkey === selectedAccount
+        ? mail.recipientPubkey
+        : (replyTo ?? (isNvelopeWelcomeSender(mail.senderPubkey) ? NVELOPE_REPLY_TO_HEX : mail.senderPubkey))
     window.nvelope.compose.open({
       identityId,
       accountId: selectedAccount,
@@ -624,7 +634,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   }
 
   const getSenderDisplay = (mail: MailRecord): string => {
-    if (mail.senderPubkey === 'nvelope') return 'nVelope'
+    if (isNvelopeWelcomeSender(mail.senderPubkey)) return 'nVelope'
     const contact = contactsByPubkey[mail.senderPubkey]
     if (contact) return contactLabel(contact, mail.senderPubkey)
     return formatNpub(mail.senderPubkey)
@@ -1170,7 +1180,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                                 <div className="break-words">
                                   <span className="text-neutral-600">From:</span>{' '}
                                   {senderName}
-                                  {!isSelf && m.senderPubkey !== 'nvelope' && (
+                                  {!isSelf && !isNvelopeWelcomeSender(m.senderPubkey) && (
                                     <span className="font-mono text-neutral-600">{' '}&lt;{formatNpub(m.senderPubkey)}&gt;</span>
                                   )}
                                 </div>
@@ -1229,7 +1239,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 text-sm font-medium text-neutral-200">
                           {getSenderDisplay(selectedMail)}
-                          {selectedMail.senderPubkey !== 'nvelope' && !contactsByPubkey[selectedMail.senderPubkey] && (
+                          {!isNvelopeWelcomeSender(selectedMail.senderPubkey) && !contactsByPubkey[selectedMail.senderPubkey] && (
                             <button
                               onClick={() => handleAddSenderToContacts(selectedMail)}
                               title="Add sender to address book"
