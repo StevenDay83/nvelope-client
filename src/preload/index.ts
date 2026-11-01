@@ -218,7 +218,7 @@ export interface ContactsListenerAPI {
   sync: (identityId: string) => Promise<{ contacts: number; mailEnabled: number }>
   clearCacheAndResync: (identityId: string) => Promise<{ contacts: number; mailEnabled: number }>
   checkCert: (identityId: string, accountId: string, pubkey: string) => Promise<{ mailEnabled: boolean }>
-  policyEta: (identityId: string, accountId: string, pubkey: string) => Promise<{ bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean; reason?: string }>
+  policyEta: (identityId: string, accountId: string, pubkey: string) => Promise<{ bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; workers?: number; denied?: boolean; reason?: string }>
   refreshProfiles: (identityId: string, accountId: string) => Promise<{ enriched: number }>
   getAvatar: (identityId: string, accountId: string, pubkey: string) => Promise<string | null>
 }

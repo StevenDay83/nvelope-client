@@ -27,7 +27,7 @@ export default function ContactsWindow({ data }: Props) {
   const [status, setStatus] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
-  const [policyEtas, setPolicyEtas] = useState<Record<string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; denied?: boolean }>>({})
+  const [policyEtas, setPolicyEtas] = useState<Record<string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; workers?: number; denied?: boolean }>>({})
   const [avatars, setAvatars] = useState<Record<string, string>>({})
   const [searchQuery, setSearchQuery] = useState('')
   const [mailOnly, setMailOnly] = useState(false)
@@ -269,7 +269,7 @@ export default function ContactsWindow({ data }: Props) {
                             ? `~${Math.round(eta.etaMinutes)} min`
                             : `~${(eta.etaMinutes / 60).toFixed(1)} hrs`
                       return (
-                        <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300" title={`This contact requires proof-of-work (≈${eta.bits} bits) — sending takes about ${label.replace('~', '')} on this machine${eta.hashesPerSecond ? ` at your measured ~${eta.hashesPerSecond.toLocaleString()} hashes/sec` : ''}`}>
+                        <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300" title={`This contact requires proof-of-work (≈${eta.bits} bits) — sending takes about ${label.replace('~', '')} on this machine${eta.hashesPerSecond ? ` with ${eta.workers ?? 1} mining threads (~${eta.hashesPerSecond.toLocaleString()} hashes/sec)` : ''}`}>
                           {label}
                         </span>
                       )

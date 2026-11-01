@@ -5,6 +5,7 @@ import { NostrToolsTransport, type NostrEvent, fetchRecipientPolicy, difficultyF
 import { getUnlockedSession } from './vaultHandlers'
 import { getDb } from './dbHandlers'
 import { getBenchmarkHashesPerMinute } from '../clientSettings'
+import { getMiningWorkerCount } from '../pow/miner'
 import { CachingTransport } from '../relay/cachingTransport'
 import { getRelaysForAccount } from '../relay/relayPrefs'
 import { enrichContactProfiles } from '../relay/profileEnrich'
@@ -165,9 +166,12 @@ export function registerContactSyncHandlers(): void {
       if (difficulty <= 1n) return { bits: 0, etaMinutes: null }
       const bits = difficulty.toString(2).length - 1
       const hpm = getBenchmarkHashesPerMinute()
-      const hashesPerSecond = hpm ? Math.round(hpm / 60) : null
+      // The benchmark measures one mining thread; actual sends parallelize
+      // across the worker pool, so scale the rate to match the outbox ETA.
+      const workers = getMiningWorkerCount()
+      const hashesPerSecond = hpm ? Math.round((hpm / 60) * workers) : null
       const etaMinutes = hashesPerSecond ? Number(difficulty) / (hashesPerSecond * 60) : null
-      return { bits, etaMinutes, hashesPerSecond }
+      return { bits, etaMinutes, hashesPerSecond, workers }
     } finally {
       transport.close()
     }
