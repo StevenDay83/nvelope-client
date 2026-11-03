@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Menu, MenuItem } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { registerVaultHandlers } from './ipc/vaultHandlers'
@@ -55,6 +55,39 @@ function guardExternalNavigation(win: BrowserWindow): void {
   })
 }
 
+// Native-style edit context menu: spelling suggestions on misspellings,
+// Cut/Copy/Paste/Select All in editable fields, Copy/Select All elsewhere.
+function attachContextMenu(win: BrowserWindow): void {
+  win.webContents.on('context-menu', (_event, params) => {
+    const menu = new Menu()
+
+    if (params.misspelledWord) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        menu.append(new MenuItem({
+          label: suggestion,
+          click: () => win.webContents.replaceMisspelling(suggestion),
+        }))
+      }
+      if (params.dictionarySuggestions.length > 0) menu.append(new MenuItem({ type: 'separator' }))
+    }
+
+    if (params.isEditable) {
+      menu.append(new MenuItem({ role: 'cut', enabled: params.editFlags.canCut }))
+      menu.append(new MenuItem({ role: 'copy', enabled: params.editFlags.canCopy }))
+      menu.append(new MenuItem({ role: 'paste', enabled: params.editFlags.canPaste }))
+      menu.append(new MenuItem({ role: 'pasteAndMatchStyle', enabled: params.editFlags.canPaste }))
+      menu.append(new MenuItem({ role: 'selectAll', enabled: params.editFlags.canSelectAll }))
+    } else {
+      if (params.selectionText) {
+        menu.append(new MenuItem({ role: 'copy' }))
+      }
+      menu.append(new MenuItem({ role: 'selectAll' }))
+    }
+
+    if (menu.items.length > 0) menu.popup({ window: win })
+  })
+}
+
 function getRendererUrl(): string {
   if (process.env['ELECTRON_RENDERER_URL']) {
     return process.env['ELECTRON_RENDERER_URL']
@@ -82,6 +115,7 @@ const createWindow = (): void => {
 
   setMainWindowForRelay(mainWindow)
   guardExternalNavigation(mainWindow)
+  attachContextMenu(mainWindow)
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -116,6 +150,7 @@ function createComposeWindow(data: Record<string, unknown>): BrowserWindow {
 
   composeWindows.add(win)
   guardExternalNavigation(win)
+  attachContextMenu(win)
   win.on('closed', () => {
     composeWindows.delete(win)
   })
@@ -151,6 +186,7 @@ function createContactsWindow(data: Record<string, unknown>): BrowserWindow {
 
   contactsWindow = win
   guardExternalNavigation(win)
+  attachContextMenu(win)
   win.on('closed', () => {
     contactsWindow = null
   })

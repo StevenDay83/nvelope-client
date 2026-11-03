@@ -12,6 +12,13 @@ const isNvelopeWelcomeSender = (pk: string | null | undefined): boolean =>
 // Official nVelope account — replies to the local welcome message land here.
 const NVELOPE_REPLY_TO_HEX = '31844eb87bf5e0974a20287e37c5317d9115002b2b8ca06ceb8628e7764bdcab'
 
+// Standard "> "-prefixed reply quote. Renders as a blockquote in the reader
+// (both markdown and plaintext bodies go through the markdown renderer).
+function buildReplyQuote(dateLabel: string, senderLabel: string, originalBody: string): string {
+  const lines = [`--- On ${dateLabel}, ${senderLabel} wrote ---`, ...originalBody.split('\n')]
+  return '\n\n' + lines.map((l) => (l.length > 0 ? `> ${l}` : '>')).join('\n')
+}
+
 interface FolderRecord {
   id: number
   accountId: string
@@ -146,6 +153,11 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   const toggleConversationView = async () => {
     const next = !conversationView
     setConversationView(next)
+    // Re-render the open message in the new mode right away
+    if (selectedMail) {
+      if (next) void loadThread(selectedMail)
+      else setThreadMails([selectedMail])
+    }
     try {
       const all = await window.nvelope.settings.getAll()
       await window.nvelope.settings.setAll({ ...all, conversationView: next })
@@ -220,6 +232,14 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     })
     return unsubscribe
   }, [identityId, loadMails, loadFolders])
+
+  // The new-mail badge is a transient notification (not an unread counter —
+  // unread state lives on the folders), so dismiss it after a short delay.
+  useEffect(() => {
+    if (newMailCount === 0) return
+    const timer = setTimeout(() => setNewMailCount(0), 10_000)
+    return () => clearTimeout(timer)
+  }, [newMailCount])
 
   // Listen for outbox queue progress (mining, sent, cancelled, errors)
   useEffect(() => {
@@ -431,7 +451,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     try {
       const data = JSON.parse(mail.messageData)
       const originalBody = data.bodyText || ''
-      replyBody = `\n\n--- On ${formatDateFull(mail.createdAt)}, ${getSenderDisplay(mail)} wrote ---\n${originalBody}`
+      replyBody = buildReplyQuote(formatDateFull(mail.createdAt), getSenderDisplay(mail), originalBody)
       if (typeof data.replyTo === 'string' && data.replyTo) {
         replyTo = data.replyTo
       }
@@ -491,7 +511,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     try {
       const data = JSON.parse(mail.messageData)
       const originalBody = data.bodyText || ''
-      replyBody = `\n\n--- On ${formatDateFull(mail.createdAt)}, ${getSenderDisplay(mail)} wrote ---\n${originalBody}`
+      replyBody = buildReplyQuote(formatDateFull(mail.createdAt), getSenderDisplay(mail), originalBody)
     } catch {
       replyBody = '\n\n--- Original message ---\n'
     }
@@ -567,6 +587,15 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     setShowMoveMenu(false)
     setContextMenu(null)
     setThreadMails([mail])
+    if (!conversationView) {
+      // Message-list mode: show exactly the selected message, not its thread.
+      if (!mail.read) {
+        await window.nvelope.db.mailMarkRead(identityId, mail.innerEventId, true)
+        loadMails()
+        loadFolders()
+      }
+      return
+    }
     const thread = await loadThread(mail)
     const newestUnread = [...thread].reverse().find((m) => !m.read)
     const latest = thread[thread.length - 1]
@@ -591,7 +620,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
 
   // Keep an open conversation in sync when mail changes (e.g. a reply arrives)
   useEffect(() => {
-    if (!selectedMail) return
+    if (!selectedMail || !conversationView) return
     loadThread(selectedMail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mails])

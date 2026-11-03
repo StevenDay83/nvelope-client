@@ -6,32 +6,33 @@ interface MailBodySource {
   messageData: string
 }
 
-function parseMailBody(messageData: string): { html: string; isHtml: boolean } {
+function parseMailBody(messageData: string): { html: string; isHtml: boolean; isPlaintext: boolean } {
   try {
     const data = JSON.parse(messageData)
     // formats is a string[] on received mail, an object map on sent mail
     const formats = data.formats
     const fmtList: string[] = Array.isArray(formats) ? formats : Object.keys(formats ?? {})
     const hasHtml = fmtList.includes('html')
+    const hasMarkdown = fmtList.includes('md') || fmtList.includes('markdown')
     if (data.bodyText) {
       // bodyText is filled with md > plaintext > html priority — render
       // markdown/plaintext through the markdown renderer, html stays raw
       // for the sanitizer + iframe path below.
-      if (fmtList.includes('md') || fmtList.includes('markdown') || fmtList.includes('plaintext')) {
-        return { html: renderMarkdown(data.bodyText), isHtml: false }
+      if (hasMarkdown || fmtList.includes('plaintext')) {
+        return { html: renderMarkdown(data.bodyText), isHtml: false, isPlaintext: !hasMarkdown }
       }
-      return { html: data.bodyText, isHtml: hasHtml || !!data.messageType?.html }
+      return { html: data.bodyText, isHtml: hasHtml || !!data.messageType?.html, isPlaintext: false }
     }
     const mt = data.messageType ?? {}
-    if (mt.md) return { html: renderMarkdown(atob(mt.md)), isHtml: false }
-    if (mt.plaintext) return { html: renderMarkdown(atob(mt.plaintext)), isHtml: false }
-    if (mt.html) return { html: atob(mt.html), isHtml: true }
-    if (formats?.html) return { html: formats.html, isHtml: true }
-    if (formats?.markdown) return { html: renderMarkdown(formats.markdown), isHtml: false }
-    if (formats?.plaintext) return { html: renderMarkdown(formats.plaintext), isHtml: false }
-    return { html: renderMarkdown(messageData), isHtml: false }
+    if (mt.md) return { html: renderMarkdown(atob(mt.md)), isHtml: false, isPlaintext: false }
+    if (mt.plaintext) return { html: renderMarkdown(atob(mt.plaintext)), isHtml: false, isPlaintext: true }
+    if (mt.html) return { html: atob(mt.html), isHtml: true, isPlaintext: false }
+    if (formats?.html) return { html: formats.html, isHtml: true, isPlaintext: false }
+    if (formats?.markdown) return { html: renderMarkdown(formats.markdown), isHtml: false, isPlaintext: false }
+    if (formats?.plaintext) return { html: renderMarkdown(formats.plaintext), isHtml: false, isPlaintext: true }
+    return { html: renderMarkdown(messageData), isHtml: false, isPlaintext: false }
   } catch {
-    return { html: renderMarkdown(messageData), isHtml: false }
+    return { html: renderMarkdown(messageData), isHtml: false, isPlaintext: false }
   }
 }
 
@@ -60,7 +61,7 @@ function gateMarkdownImages(html: string): { html: string; hasRemoteImages: bool
  * main process routes through shell.openExternal (setWindowOpenHandler).
  */
 export default function MailBody({ mail }: { mail: MailBodySource }) {
-  const { html, isHtml } = useMemo(() => parseMailBody(mail.messageData), [mail.messageData])
+  const { html, isHtml, isPlaintext } = useMemo(() => parseMailBody(mail.messageData), [mail.messageData])
   const [loadImages, setLoadImages] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
@@ -96,6 +97,8 @@ export default function MailBody({ mail }: { mail: MailBodySource }) {
         {loadImagesButton}
         <div
           className="prose prose-invert max-w-none prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-blockquote:border-blue-500 prose-code:text-amber-300"
+          // Plaintext renders as a classic mail serif; markdown keeps the UI font.
+          style={isPlaintext ? { fontFamily: "'Times New Roman', Times, serif" } : undefined}
           dangerouslySetInnerHTML={{ __html: gated?.html ?? sanitized }}
         />
       </div>
