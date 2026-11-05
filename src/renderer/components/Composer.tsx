@@ -211,9 +211,17 @@ export default function Composer({
     }
   }
 
-  const fromLabel = accountDisplayName && accountNpub
-    ? `${accountDisplayName} <${accountNpub}>`
-    : accountNpub ?? accountId.slice(0, 20) + '...'
+  const fromNpub = useMemo(() => {
+    if (accountNpub) return accountNpub
+    try {
+      return npubEncode(accountId)
+    } catch {
+      return ''
+    }
+  }, [accountNpub, accountId])
+  const fromLabel = accountDisplayName && fromNpub
+    ? `${accountDisplayName} <${fromNpub}>`
+    : fromNpub || accountId.slice(0, 20) + '...'
 
   // Autosave draft every 10s
   useEffect(() => {
