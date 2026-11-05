@@ -54,6 +54,15 @@ function guardExternalNavigation(win: BrowserWindow): void {
     }
     return { action: 'deny' }
   })
+  // In-page navigation (plain <a href> clicks) is never allowed to replace
+  // the app window; external http(s) targets go to the system browser.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url === win.webContents.getURL()) return
+    event.preventDefault()
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      void shell.openExternal(url)
+    }
+  })
 }
 
 // Native-style edit context menu: spelling suggestions on misspellings,
@@ -211,10 +220,10 @@ function createAboutWindow(): void {
     data.accountId = account.pubkey
     if (account.displayName) data.accountDisplayName = account.displayName
   }
-  // Content keeps the about-bg.jpg aspect (1344x768) at 2/3 scale.
+  // Content keeps the about-bg.jpg aspect (660x465) at 2/3 scale.
   const win = new BrowserWindow({
-    width: 896,
-    height: 512,
+    width: 440,
+    height: 310,
     useContentSize: true,
     resizable: false,
     maximizable: false,

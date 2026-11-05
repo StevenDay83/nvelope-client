@@ -35,22 +35,25 @@ export default function AboutWindow({ data }: { data: Record<string, unknown> })
         className="absolute inset-0 bg-cover bg-center"
         style={{ backgroundImage: "url('./about-bg.jpg')" }}
       />
-      <div className="absolute inset-0 bg-gradient-to-b from-[#3b1563]/50 via-[#2a0d4a]/60 to-[#160527]/85" />
+      <div className="absolute inset-0 bg-gradient-to-b from-[#3b1563]/40 via-[#2a0d4a]/45 to-[#160527]/75" />
 
       <div className="relative flex flex-col items-center space-y-2 px-8 text-center">
         <h1 className="text-4xl font-bold text-white drop-shadow-lg">nVelope</h1>
-        <p className="text-sm text-purple-200 drop-shadow">Self-sovereign email over the Internet.</p>
-        <p className="text-xs text-purple-300 drop-shadow">Version {version}</p>
+        <p className="text-sm text-purple-200 drop-shadow">Version {version}</p>
 
         <div className="flex items-center gap-4 pt-3 text-sm">
           <a
             href="https://nvelope.messagepush.io"
+            target="_blank"
+            rel="noreferrer"
             className="rounded-md border border-purple-300/40 bg-black/30 px-3 py-1.5 text-purple-100 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-white"
           >
-            nvelope.messagepush.io
+            Website
           </a>
           <a
             href="https://github.com/StevenDay83/nvelope-client"
+            target="_blank"
+            rel="noreferrer"
             className="rounded-md border border-purple-300/40 bg-black/30 px-3 py-1.5 text-purple-100 backdrop-blur-sm transition-colors hover:bg-black/50 hover:text-white"
           >
             GitHub
