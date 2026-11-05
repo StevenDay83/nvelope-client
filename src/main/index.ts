@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, shell, Menu, MenuItem } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Menu, MenuItem, type MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
-import { registerVaultHandlers } from './ipc/vaultHandlers'
+import { registerVaultHandlers, getAllUnlockedSessions } from './ipc/vaultHandlers'
 import { registerDbHandlers } from './ipc/dbHandlers'
 import { registerFileHandlers } from './ipc/fileHandlers'
 import { registerCertHandlers } from './ipc/certHandlers'
@@ -43,6 +43,7 @@ function resolvePreload(): string {
 let mainWindow: BrowserWindow | null = null
 const composeWindows = new Set<BrowserWindow>()
 let contactsWindow: BrowserWindow | null = null
+let aboutWindow: BrowserWindow | null = null
 
 // External links (mail bodies, iframe popups) open in the system browser,
 // never in an Electron window. Everything else is denied.
@@ -166,8 +167,7 @@ function createContactsWindow(data: Record<string, unknown>): BrowserWindow {
     contactsWindow.webContents.send('contacts:prefill', data)
     contactsWindow.focus()
     return contactsWindow
-  }
-  const preloadPath = resolvePreload()
+  }  const preloadPath = resolvePreload()
   const win = new BrowserWindow({
     width: 700,
     height: 520,
@@ -195,7 +195,86 @@ function createContactsWindow(data: Record<string, unknown>): BrowserWindow {
   return win
 }
 
+// Custom About window (replaces the macOS-only native about panel). Carries
+// the first unlocked session's account so the page can offer "message the
+// nVelope team" compose without knowing session state itself.
+function createAboutWindow(): void {
+  if (aboutWindow && !aboutWindow.isDestroyed()) {
+    aboutWindow.focus()
+    return
+  }
+  const data: Record<string, unknown> = { mode: 'about', version: app.getVersion() }
+  const session = getAllUnlockedSessions()[0]
+  const account = session?.payload.accounts[0]
+  if (session && account) {
+    data.identityId = session.identityId
+    data.accountId = account.pubkey
+    if (account.displayName) data.accountDisplayName = account.displayName
+  }
+  // Content keeps the about-bg.jpg aspect (1344x768) at 2/3 scale.
+  const win = new BrowserWindow({
+    width: 896,
+    height: 512,
+    useContentSize: true,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: 'About nVelope',
+    autoHideMenuBar: true,
+    parent: mainWindow ?? undefined,
+    webPreferences: {
+      preload: resolvePreload(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      additionalArguments: [`--window-data=${JSON.stringify(data)}`],
+    },
+  })
+  aboutWindow = win
+  guardExternalNavigation(win)
+  attachContextMenu(win)
+  win.on('closed', () => {
+    aboutWindow = null
+  })
+  win.loadURL(getRendererUrl())
+}
+
+// Real application menu (previously the Electron default, which only exposes
+// About on macOS). Edit menu stays so copy/paste accelerators keep working.
+function installApplicationMenu(): void {
+  const isMac = process.platform === 'darwin'
+  const aboutItem: MenuItemConstructorOptions = { label: 'About nVelope', click: () => createAboutWindow() }
+  const template: MenuItemConstructorOptions[] = []
+  if (isMac) {
+    template.push({
+      label: app.name,
+      submenu: [
+        aboutItem,
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    })
+  }
+  template.push({ label: 'File', submenu: [isMac ? { role: 'close' as const } : { role: 'quit' as const }] })
+  template.push({ role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' })
+  const helpSubmenu: MenuItemConstructorOptions[] = []
+  if (!isMac) helpSubmenu.push(aboutItem)
+  helpSubmenu.push(
+    { label: 'nVelope Website', click: () => void shell.openExternal('https://nvelope.messagepush.io') },
+    { label: 'nVelope on GitHub', click: () => void shell.openExternal('https://github.com/StevenDay83/nvelope-client') },
+  )
+  template.push({ label: 'Help', submenu: helpSubmenu })
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 app.whenReady().then(() => {
+  installApplicationMenu()
   registerVaultHandlers()
   registerDbHandlers()
   registerFileHandlers()
@@ -218,6 +297,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle('contactsWindow:open', (_event, data: Record<string, unknown>) => {
     createContactsWindow(data)
+    return { ok: true }
+  })
+
+  ipcMain.handle('app:openAbout', () => {
+    createAboutWindow()
     return { ok: true }
   })
 

@@ -32,9 +32,14 @@ function decodeNsec(nsec: string): Uint8Array {
   return result.data as Uint8Array
 }
 
+// Re-check the hour before the last cursor on every scan: relay clock skew and
+// events that arrive just after a scan's cutoff would otherwise be missed
+// forever. Duplicates are filtered by the envelope-id check on store.
+const SCAN_OVERLAP_SECONDS = 60 * 60
+
 function getSinceForAccount(settings: VaultPayload['settings'], pubkey: string): number | undefined {
   const lastRetrieved = settings.lastRetrievedPerAccount?.[pubkey]
-  if (lastRetrieved) return lastRetrieved
+  if (lastRetrieved) return lastRetrieved - SCAN_OVERLAP_SECONDS
   // Default: 7 days ago to avoid fetching too much history on first scan
   return Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
 }
@@ -43,7 +48,7 @@ function getSinceForAccount(settings: VaultPayload['settings'], pubkey: string):
 // direct cursor would skip broadcast events that arrive between direct scans.
 function getBroadcastSinceForAccount(settings: VaultPayload['settings'], pubkey: string): number | undefined {
   const lastRetrieved = settings.lastBroadcastRetrievedPerAccount?.[pubkey]
-  if (lastRetrieved) return lastRetrieved
+  if (lastRetrieved) return lastRetrieved - SCAN_OVERLAP_SECONDS
   return Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60
 }
 

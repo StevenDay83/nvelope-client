@@ -625,6 +625,14 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
               </button>
             ))}
           </div>
+          <div className="mt-3 border-t border-neutral-700/50 pt-3">
+            <button
+              onClick={() => window.nvelope.app.openAbout()}
+              className="w-full rounded-md px-2.5 py-1.5 text-left text-sm text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
+            >
+              About nVelope
+            </button>
+          </div>
         </div>
 
         {/* Content */}

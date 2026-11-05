@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import ComposeWindow from './components/ComposeWindow'
 import ContactsWindow from './components/ContactsWindow'
+import AboutWindow from './components/AboutWindow'
 import './styles/index.css'
 
 const composeData = window.nvelope.composeData
@@ -33,6 +34,13 @@ if (!rootEl) {
       ReactDOM.createRoot(rootEl).render(
         <React.StrictMode>
           <ContactsWindow data={windowData} />
+        </React.StrictMode>,
+      )
+    } else if (windowData?.mode === 'about') {
+      // About window mode
+      ReactDOM.createRoot(rootEl).render(
+        <React.StrictMode>
+          <AboutWindow data={windowData} />
         </React.StrictMode>,
       )
     } else {

@@ -96,14 +96,16 @@ function stepIndexForScreen(screen: Screen): number {
 
 function StepIndicator({
   currentStep,
+  labels,
   onStepClick,
 }: {
   currentStep: number
+  labels: string[]
   onStepClick?: (step: number) => void
 }) {
   return (
     <div className="flex items-center justify-center gap-1 text-sm mb-6">
-      {STEP_LABELS.map((label, i) => {
+      {labels.map((label, i) => {
         const clickable = onStepClick && i < currentStep
         return (
           <div key={label} className="flex items-center gap-1">
@@ -120,7 +122,7 @@ function StepIndicator({
             >
               {label}
             </span>
-            {i < STEP_LABELS.length - 1 && (
+            {i < labels.length - 1 && (
               <span className="text-neutral-600 mx-1">●</span>
             )}
           </div>
@@ -192,7 +194,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
   const [error, setError] = useState('')
   const [nsecSaved, setNsecSaved] = useState(false)
   const [nsecWarned, setNsecWarned] = useState(false)
-  const [, setStoredBenchmarkLoaded] = useState(false)
+  const [hadStoredBenchmark, setHadStoredBenchmark] = useState(false)
   const [keypairGenerated, setKeypairGenerated] = useState(false)
   const [importInput, setImportInput] = useState('')
   const [importPreview, setImportPreview] = useState<{ pubkey: string; name?: string; picture?: string; about?: string; relaySource?: 'nip65' | 'kind3' | 'defaults'; relayCount?: number } | null>(null)
@@ -211,9 +213,9 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
       const hpm = typeof value === 'number' ? value : 0
       if (hpm > 0 && version === 2) {
         setData((d) => ({ ...d, benchmarkHpm: hpm }))
+        setHadStoredBenchmark(true)
       }
-      setStoredBenchmarkLoaded(true)
-    }).catch(() => setStoredBenchmarkLoaded(true))
+    }).catch(() => {})
   }, [])
 
   // Imported accounts: check the relays for an already-published mail
@@ -551,9 +553,11 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const handleStepClick = (step: number) => {
     const current = stepIndexForScreen(screen)
-    if (step >= current) return
+    // Display indices shift by one when the Benchmark step is hidden
+    const fullStep = hadStoredBenchmark ? step + 1 : step
+    if (fullStep >= current) return
     // Map step index back to the first screen of that step
-    switch (step) {
+    switch (fullStep) {
       case 0: setScreen('benchmark'); break
       case 1: setScreen('identity'); break
       case 2: setScreen('accountChoice'); break
@@ -582,7 +586,8 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
   // Render helpers
   // ----------------------------------------------------------------
 
-  const stepIndex = stepIndexForScreen(screen)
+  const stepIndex = stepIndexForScreen(screen) - (hadStoredBenchmark ? 1 : 0)
+  const stepLabels = hadStoredBenchmark ? STEP_LABELS.slice(1) : STEP_LABELS
 
   const renderWelcome = () => (
     <div className="text-center space-y-5">
@@ -629,7 +634,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderBenchmark = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold text-center">Proof-of-Work Benchmark</h2>
       <p className="text-sm text-neutral-400 leading-relaxed text-center">
         Before we begin setting up your Identity and Accounts, we need to quickly benchmark how fast your computer can process nVelope Mail.
@@ -676,7 +681,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderIdentity = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <div className="space-y-3">
         <p className="text-sm text-neutral-400 leading-relaxed">
           Your nVelope client identity is your local collection of accounts. All your preferences, messages, and secure private data will be stored here. If you have an identity file to import, select <strong>Import</strong> instead.
@@ -728,7 +733,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderAccountChoice = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">Account Setup</h2>
       <p className="text-sm text-neutral-400 leading-relaxed">
         Now that we have an Identity in nVelope, let&apos;s add your first account.
@@ -785,7 +790,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderAccountImport = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">Import Existing Account</h2>
       <p className="text-sm text-neutral-400 leading-relaxed">
         Paste your account&apos;s secret key (nsec). We&apos;ll validate it, derive your public key, and try to pull your existing profile from your relays.
@@ -857,7 +862,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderAccountProfile = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">New Account Creation: Profile</h2>
       <p className="text-sm text-neutral-400">Let&apos;s get started with your Profile information.</p>
       <p className="text-xs text-neutral-500">Note: Images must be hosted from another location and cannot be uploaded.</p>
@@ -922,7 +927,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderAccountCreated = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">New Account Creation: Profile</h2>
       <p className="text-sm text-neutral-300">
         Your new Account{' '}
@@ -983,7 +988,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderPolicies = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">nVelope Policies</h2>
       <p className="text-sm text-neutral-400">
         We will create a simple and optimized recipient policy for you to start. You will be able to customize it after we are all set up.
@@ -1048,7 +1053,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderCertificate = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">Account Certificate</h2>
       <p className="text-sm text-neutral-400 leading-relaxed">
         You will need a nvelope certificate to allow others to send you mail. If you have a private key certificate generated elsewhere you want to import, you can do so now. Otherwise we can generate one for you.
@@ -1137,7 +1142,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderNetwork = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">Network</h2>
       <p className="text-sm text-neutral-400 leading-relaxed">
         nVelope operates over what is known as Nostr or &quot;The Nostr Network&quot;. It is a series of independently owned servers used for everything from sending nVelope Mail to Social media.
@@ -1197,7 +1202,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
 
   const renderReview = () => (
     <div className="space-y-5">
-      <StepIndicator currentStep={stepIndex} onStepClick={handleStepClick} />
+      <StepIndicator currentStep={stepIndex} labels={stepLabels} onStepClick={handleStepClick} />
       <h2 className="text-xl font-semibold">Review</h2>
       <p className="text-sm text-neutral-400">
         Please review all information about your Identity, Accounts, and Network. If anything needs to be adjusted go back to the associated section.
@@ -1277,7 +1282,7 @@ export default function OnboardingWizard({ onComplete, onClose }: Props) {
             <button
               onClick={requestClose}
               title="Cancel setup"
-              className="rounded p-1 text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300 transition-colors"
+              className="rounded bg-red-600 p-1 text-white hover:bg-red-500 transition-colors"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

@@ -30,7 +30,7 @@ export default function ContactsWindow({ data }: Props) {
   const [policyEtas, setPolicyEtas] = useState<Record<string, { bits: number; etaMinutes: number | null; hashesPerSecond?: number | null; workers?: number; denied?: boolean }>>({})
   const [avatars, setAvatars] = useState<Record<string, string>>({})
   const [searchQuery, setSearchQuery] = useState('')
-  const [mailOnly, setMailOnly] = useState(false)
+  const [mailOnly, setMailOnly] = useState(true)
 
   const loadAvatars = useCallback(async (list: ContactRecord[]) => {
     const entries = await Promise.all(
