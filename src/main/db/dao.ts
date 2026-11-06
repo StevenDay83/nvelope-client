@@ -78,6 +78,8 @@ export function insertMail(db: Database.Database, mail: MailRecord): void {
       read=excluded.read,
       marked=excluded.marked,
       spamScore=excluded.spamScore,
+      recipientPubkey=excluded.recipientPubkey,
+      subject=excluded.subject,
       messageData=excluded.messageData
   `)
   stmt.run(

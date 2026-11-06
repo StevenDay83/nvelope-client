@@ -5,7 +5,7 @@ import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
 import type { Event as NostrEvent } from 'nostr-tools'
 import { RecipientPolicy } from 'nvelope-core'
 import { getUnlockedSession } from './vaultHandlers'
-import { getDb } from './dbHandlers'
+import { getDb, broadcastMailChanged } from './dbHandlers'
 import { getBenchmarkHashesPerMinute } from '../clientSettings'
 import { DEFAULT_RELAYS, getRelaysForAccount } from '../relay/relayPrefs'
 import * as dao from '../db/dao'
@@ -346,6 +346,7 @@ export function registerSendHandlers(): void {
         messageData,
       })
 
+      broadcastMailChanged(identityId)
       return { draftId: id }
     },
   )

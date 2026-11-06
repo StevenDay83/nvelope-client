@@ -127,6 +127,7 @@ export interface RelayListAPI {
 
 export interface MailListenerAPI {
   onNewMail: (callback: (data: { identityId: string; directCount: number; broadcastCount: number }) => void) => () => void
+  onChanged: (callback: (data: { identityId: string }) => void) => () => void
 }
 
 export interface SettingsAPI {
@@ -325,6 +326,11 @@ const mailListenerAPI: MailListenerAPI = {
     const handler = (_event: Electron.IpcRendererEvent, data: { identityId: string; directCount: number; broadcastCount: number }) => callback(data)
     ipcRenderer.on('mail:new', handler)
     return () => ipcRenderer.removeListener('mail:new', handler)
+  },
+  onChanged: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { identityId: string }) => callback(data)
+    ipcRenderer.on('mail:changed', handler)
+    return () => ipcRenderer.removeListener('mail:changed', handler)
   },
 }
 

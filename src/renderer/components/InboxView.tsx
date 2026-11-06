@@ -241,6 +241,19 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     return () => clearTimeout(timer)
   }, [newMailCount])
 
+  // Mail tables can change from other windows (draft autosave/discard in the
+  // composer) — keep the list and folder counts in sync.
+  useEffect(() => {
+    const unsubscribe = window.nvelope.mail.onChanged((data) => {
+      if (data.identityId !== identityId) return
+      loadMails()
+      loadFolders()
+    })
+    return unsubscribe
+  }, [identityId, loadMails, loadFolders])
+
+  const foldersById = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders])
+
   // Listen for outbox queue progress (mining, sent, cancelled, errors)
   useEffect(() => {
     const unsubscribe = window.nvelope.outbox.onProgress((data) => {
@@ -402,7 +415,22 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     }
   }
 
+  // Discarding a draft is permanent — drafts never park in the Deleted folder.
+  const handleDiscardDraft = async (mail: MailRecord) => {
+    if (!confirm('Are you sure you want to delete this draft?')) return
+    await window.nvelope.db.mailDelete(identityId, mail.innerEventId)
+    loadMails()
+    loadFolders()
+    if (selectedMail?.innerEventId === mail.innerEventId) {
+      setSelectedMail(null)
+    }
+  }
+
   const handleDelete = async (mail: MailRecord) => {
+    if (mail.state === 'draft') {
+      await handleDiscardDraft(mail)
+      return
+    }
     const deletedFolder = folders.find((f) => f.type === 'deleted')
     if (deletedFolder && mail.folderId === deletedFolder.id) {
       if (!confirm('Permanently delete this message? This cannot be undone.')) return
@@ -436,6 +464,20 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       return
     }
     await window.nvelope.db.mailMoveToFolder(identityId, mail.innerEventId, junkFolder.id)
+    loadMails()
+    loadFolders()
+    if (selectedMail?.innerEventId === mail.innerEventId) {
+      setSelectedMail(null)
+    }
+  }
+
+  const handleNotSpam = async (mail: MailRecord) => {
+    const inboxFolder = folders.find((f) => f.type === 'inbox')
+    if (!inboxFolder) {
+      alert('No Inbox folder found')
+      return
+    }
+    await window.nvelope.db.mailMoveToFolder(identityId, mail.innerEventId, inboxFolder.id)
     loadMails()
     loadFolders()
     if (selectedMail?.innerEventId === mail.innerEventId) {
@@ -545,7 +587,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     }
   }, [identityId, selectedAccount])
 
-  // Drafts reopen in the composer (keyed by draftId so autosave updates the same row)
+  // The Edit button in the draft preview reopens the composer (keyed by
+  // draftId so autosave keeps updating the same row).
   const handleEditDraft = (mail: MailRecord) => {
     const acct = accounts.find((a) => a.pubkey === selectedAccount)
     let recipient = ''
@@ -579,10 +622,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   }
 
   const handleSelectMail = async (mail: MailRecord) => {
-    if (mail.state === 'draft') {
-      handleEditDraft(mail)
-      return
-    }
+    // Drafts preview like any other message; Edit in the preview toolbar
+    // opens the composer.
     setSelectedMail(mail)
     setShowMoveMenu(false)
     setContextMenu(null)
@@ -721,6 +762,21 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   }
 
   const selectedFolderName = folders.find((f) => f.id === selectedFolder)?.name ?? ''
+
+  // A draft's recipient/subject live in messageData (recipientNpub /
+  // subjectLine), not in the typed columns.
+  const getDraftField = (mail: MailRecord, field: 'recipientNpub' | 'subjectLine'): string => {
+    try {
+      const value = JSON.parse(mail.messageData)[field]
+      return typeof value === 'string' ? value : ''
+    } catch {
+      return ''
+    }
+  }
+
+  const selectedIsDraft = selectedMail?.state === 'draft'
+  // Drafts are from yourself — show the account name rather than a npub.
+  const selfDisplay = accounts.find((a) => a.pubkey === selectedAccount)?.displayName || 'You'
 
   return (
     <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
@@ -1094,8 +1150,21 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
         <div className="flex-1 overflow-y-auto bg-neutral-900">
           {selectedMail ? (
             <div className="flex h-full flex-col">
-              {/* Action toolbar */}
+              {/* Action toolbar — drafts get just Edit + Discard */}
               <div className="flex items-center gap-0.5 border-b border-neutral-700/50 bg-neutral-800 px-2 py-1">
+                {selectedMail.state === 'draft' ? (
+                  <>
+                    <ActionButton onClick={() => handleEditDraft(selectedMail)} title="Edit draft">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                      <span className="text-xs">Edit</span>
+                    </ActionButton>
+                    <ActionButton onClick={() => handleDiscardDraft(selectedMail)} title="Discard draft permanently">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      <span className="text-xs">Discard</span>
+                    </ActionButton>
+                  </>
+                ) : (
+                  <>
                 <ActionButton onClick={() => handleReply(selectedMail)} title="Reply">
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                   <span className="text-xs">Reply</span>
@@ -1135,10 +1204,17 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                   )}
                 </div>
                 <div className="mx-1 h-4 w-px bg-neutral-600" />
-                <ActionButton onClick={() => handleSpam(selectedMail)} title="Spam">
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                  <span className="text-xs">Spam</span>
-                </ActionButton>
+                {selectedFolderType === 'junk' ? (
+                  <ActionButton onClick={() => handleNotSpam(selectedMail)} title="Not Spam — move back to Inbox">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 19h18M5 19V9a2 2 0 012-2h10a2 2 0 012 2v10M3 11l7.89 5.26a2 2 0 002.22 0L21 11" /></svg>
+                    <span className="text-xs">Not Spam</span>
+                  </ActionButton>
+                ) : (
+                  <ActionButton onClick={() => handleSpam(selectedMail)} title="Spam">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    <span className="text-xs">Spam</span>
+                  </ActionButton>
+                )}
                 <ActionButton onClick={() => handleDelete(selectedMail)} title="Delete">
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                   <span className="text-xs">Delete</span>
@@ -1163,6 +1239,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                     </svg>
                   </button>
                 </div>
+                  </>
+                )}
               </div>
 
               {threadMails.length > 1 ? (
@@ -1201,7 +1279,14 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                             {!expanded && (
                               <span className="min-w-0 flex-1 truncate text-xs text-neutral-500">{getMailPreview(m)}</span>
                             )}
-                            <span className="ml-auto shrink-0 text-xs text-neutral-500">{formatDateFull(m.createdAt)}</span>
+                            <span className="ml-auto flex shrink-0 items-center gap-2">
+                              {m.folderId != null && foldersById.has(m.folderId) && (
+                                <span className="rounded border border-neutral-700 bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-neutral-400">
+                                  {foldersById.get(m.folderId)!.name}
+                                </span>
+                              )}
+                              <span className="text-xs text-neutral-500">{formatDateFull(m.createdAt)}</span>
+                            </span>
                           </button>
                           {expanded && (
                             <div className="border-t border-neutral-800 p-4">
@@ -1259,16 +1344,19 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                   {/* Message header */}
                   <div className="border-b border-neutral-700/50 bg-neutral-900 p-4">
                     <h2 className="text-lg font-semibold text-white leading-snug">
-                      {selectedMail.subject || '(no subject)'}
+                      {(selectedIsDraft ? getDraftField(selectedMail, 'subjectLine') || selectedMail.subject : selectedMail.subject) || '(no subject)'}
                     </h2>
                     <div className="mt-3 flex items-start gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-sm font-bold text-emerald-400">
-                        {getInitials(getSenderDisplay(selectedMail))}
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ${selectedIsDraft ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                        {getInitials(selectedIsDraft ? selfDisplay : getSenderDisplay(selectedMail))}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 text-sm font-medium text-neutral-200">
-                          {getSenderDisplay(selectedMail)}
-                          {!isNvelopeWelcomeSender(selectedMail.senderPubkey) && !contactsByPubkey[selectedMail.senderPubkey] && (
+                          {selectedIsDraft ? selfDisplay : getSenderDisplay(selectedMail)}
+                          {selectedIsDraft && (
+                            <span className="rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">Draft</span>
+                          )}
+                          {!selectedIsDraft && !isNvelopeWelcomeSender(selectedMail.senderPubkey) && !contactsByPubkey[selectedMail.senderPubkey] && (
                             <button
                               onClick={() => handleAddSenderToContacts(selectedMail)}
                               title="Add sender to address book"
@@ -1280,12 +1368,14 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                         </div>
                         <div className="text-xs text-neutral-500 mt-0.5 break-words">
                           <span className="text-neutral-600">To:</span>{' '}
-                          {selectedMail.isBroadcast
-                            ? (() => {
-                                const acct = accounts.find((a) => a.pubkey === selectedAccount)
-                                return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
-                              })()
-                            : getToLine(selectedMail)}
+                          {selectedIsDraft
+                            ? getDraftField(selectedMail, 'recipientNpub') || '(no recipient)'
+                            : selectedMail.isBroadcast
+                              ? (() => {
+                                  const acct = accounts.find((a) => a.pubkey === selectedAccount)
+                                  return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
+                                })()
+                              : getToLine(selectedMail)}
                         </div>
                         <div className="text-xs text-neutral-500 mt-0.5">
                           {formatDateFull(selectedMail.createdAt)}

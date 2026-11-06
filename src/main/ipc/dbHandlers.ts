@@ -17,6 +17,14 @@ function broadcastContactsChanged(identityId: string, accountId: string): void {
   }
 }
 
+// Mail mutations can come from any window (e.g. draft autosave/discard in a
+// compose window), so let every window know the mail tables changed.
+export function broadcastMailChanged(identityId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('mail:changed', { identityId })
+  }
+}
+
 function ensureDbDir(): void {
   if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true })
 }
@@ -272,14 +280,17 @@ export function registerDbHandlers(): void {
     } else {
       dao.moveToFolder(db, innerEventId, folderId)
     }
+    broadcastMailChanged(identityId)
   })
 
   ipcMain.handle('db:mail:softDelete', async (_event, identityId: string, innerEventId: string) => {
     dao.softDeleteMail(getDb(identityId), innerEventId)
+    broadcastMailChanged(identityId)
   })
 
   ipcMain.handle('db:mail:delete', async (_event, identityId: string, innerEventId: string) => {
     dao.deleteMail(getDb(identityId), innerEventId)
+    broadcastMailChanged(identityId)
   })
 
   // --- Folders ---
