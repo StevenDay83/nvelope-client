@@ -2,7 +2,7 @@
 
 A desktop mail client for the **nvelope protocol** — private, spam-resistant electronic mail over [Nostr](https://nostr.com) relays. No mail servers, no accounts to sign up for: your Nostr keypair *is* your address.
 
-> **Status: Beta (`0.1.0-beta.1`).** Core sending, receiving, contacts, and policies are functional and tested against public relays. Expect rough edges; backup your keys before relying on it.
+> **Status: Beta (`0.1.0-beta.5`).** Core sending, receiving, contacts, and policies are functional and tested against public relays. Expect rough edges; backup your keys before relying on it.
 
 ## How it works
 
@@ -54,6 +54,7 @@ Data lives in the Electron `userData` directory (macOS: `~/Library/Application S
 
 - Protocol spec: [nvelope-core/SPEC.md](https://github.com/StevenDay83/nvelope-core/blob/master/SPEC.md)
 - Protocol library: [nvelope-core](https://github.com/StevenDay83/nvelope-core)
+- nVelope Website: [nvelope.messagepush.io](https://nvelope.messagepush.io)
 
 ## License
 
