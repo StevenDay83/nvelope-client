@@ -233,6 +233,7 @@ export default function Composer({
           subject: subject || undefined,
           body: body || undefined,
           format,
+          threadId: initialThreadId,
         })
         if (result.draftId !== draftId) setDraftId(result.draftId)
       } catch (e) {
@@ -240,7 +241,7 @@ export default function Composer({
       }
     }, 10000)
     return () => clearInterval(timer)
-  }, [to, subject, body, format, identityId, accountId, draftId])
+  }, [to, subject, body, format, identityId, accountId, draftId, initialThreadId])
 
   const insertFormat = useCallback((before: string, after: string) => {
     const el = textareaRef.current
@@ -334,6 +335,7 @@ export default function Composer({
         subject: subject || undefined,
         body: body || undefined,
         format,
+        threadId: initialThreadId,
       })
       if (result.draftId !== draftId) setDraftId(result.draftId)
       setProgress('Draft saved')
@@ -352,6 +354,7 @@ export default function Composer({
           subject: subject || undefined,
           body: body || undefined,
           format,
+          threadId: initialThreadId,
         })
         if (result.draftId !== draftId) setDraftId(result.draftId)
       } catch { /* closing anyway */ }

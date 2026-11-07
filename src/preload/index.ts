@@ -161,6 +161,7 @@ export interface SendAPI {
       subject?: string
       body?: string
       format?: 'plaintext' | 'markdown' | 'html'
+      threadId?: string
     },
   ) => Promise<{ draftId: string }>
 }

@@ -622,7 +622,9 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       subject: draftSubject || undefined,
       body: draftBody || undefined,
       format: draftFormat,
-      threadId: mail.threadId || undefined,
+      // threadId equal to the draft's own id is just the placeholder —
+      // send:queue replaces it with a fresh thread id on send.
+      threadId: mail.threadId && mail.threadId !== mail.innerEventId ? mail.threadId : undefined,
       draftId: mail.innerEventId,
     })
   }

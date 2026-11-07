@@ -304,6 +304,7 @@ export function registerSendHandlers(): void {
         subject?: string
         body?: string
         format?: 'plaintext' | 'markdown' | 'html'
+        threadId?: string
       },
     ) => {
       const db = getDb(identityId)
@@ -320,6 +321,13 @@ export function registerSendHandlers(): void {
       }
 
       const id = draftId ?? `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      // Never clobber a real threadId: a reply draft keeps the thread it
+      // belongs to. Only brand-new drafts carry the draft-id placeholder,
+      // which send:queue replaces with a generated thread id.
+      const existing = draftId
+        ? db.prepare('SELECT threadId FROM mail WHERE innerEventId = ?').get(draftId) as { threadId: string | null } | undefined
+        : undefined
+      const threadId = payload.threadId ?? existing?.threadId ?? id
       const messageData = JSON.stringify({
         draftId: id,
         recipientNpub: payload.recipientNpub ?? '',
@@ -338,7 +346,7 @@ export function registerSendHandlers(): void {
         senderPubkey: accountId,
         recipientPubkey: recipientHex,
         subject: payload.subject || null,
-        threadId: id,
+        threadId,
         isBroadcast: 0,
         createdAt: Math.floor(Date.now() / 1000),
         read: 1,
