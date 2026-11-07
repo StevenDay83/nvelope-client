@@ -343,8 +343,24 @@ export default function Composer({
     }
   }
 
+  // Close keeps any content as a draft (autosave-on-close), then closes.
+  const handleClose = async () => {
+    if (to || subject || body) {
+      try {
+        const result = await window.nvelope.send.saveDraft(identityId, accountId, draftId, {
+          recipientNpub: to || undefined,
+          subject: subject || undefined,
+          body: body || undefined,
+          format,
+        })
+        if (result.draftId !== draftId) setDraftId(result.draftId)
+      } catch { /* closing anyway */ }
+    }
+    onClose()
+  }
+
   // Discard removes the autosaved draft outright (never the Deleted folder).
-  // With nothing saved yet it behaves exactly like Cancel.
+  // With nothing saved yet it just closes the window.
   const handleDiscard = async () => {
     if (!draftId) {
       onClose()
@@ -411,10 +427,10 @@ export default function Composer({
             Attach
           </button>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1.5 text-sm hover:bg-neutral-700 transition-colors"
           >
-            Cancel
+            Close
           </button>
         </div>
         <div className="flex items-center gap-2">

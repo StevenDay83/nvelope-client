@@ -27,9 +27,12 @@ function parseMailBody(messageData: string): { html: string; isHtml: boolean; is
     if (mt.md) return { html: renderMarkdown(atob(mt.md)), isHtml: false, isPlaintext: false }
     if (mt.plaintext) return { html: renderMarkdown(atob(mt.plaintext)), isHtml: false, isPlaintext: true }
     if (mt.html) return { html: atob(mt.html), isHtml: true, isPlaintext: false }
-    if (formats?.html) return { html: formats.html, isHtml: true, isPlaintext: false }
-    if (formats?.markdown) return { html: renderMarkdown(formats.markdown), isHtml: false, isPlaintext: false }
-    if (formats?.plaintext) return { html: renderMarkdown(formats.plaintext), isHtml: false, isPlaintext: true }
+    // typeof (not truthiness) so an empty-string body still counts as a body —
+    // otherwise a blank draft falls through and renders raw messageData JSON.
+    if (typeof formats?.html === 'string') return { html: formats.html, isHtml: true, isPlaintext: false }
+    if (typeof formats?.markdown === 'string') return { html: renderMarkdown(formats.markdown), isHtml: false, isPlaintext: false }
+    if (typeof formats?.md === 'string') return { html: renderMarkdown(formats.md), isHtml: false, isPlaintext: false }
+    if (typeof formats?.plaintext === 'string') return { html: renderMarkdown(formats.plaintext), isHtml: false, isPlaintext: true }
     return { html: renderMarkdown(messageData), isHtml: false, isPlaintext: false }
   } catch {
     return { html: renderMarkdown(messageData), isHtml: false, isPlaintext: false }

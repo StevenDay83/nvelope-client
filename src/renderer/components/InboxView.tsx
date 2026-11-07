@@ -206,9 +206,10 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   }, [identityId, selectedAccount, selectedFolder])
 
   const loadMails = useCallback(async () => {
-    if (!selectedAccount || selectedFolder === null) return
+    if (!selectedAccount || selectedFolder === null) return [] as MailRecord[]
     const list = (await window.nvelope.db.mailGetByFolder(identityId, selectedAccount, selectedFolder)) as MailRecord[]
     setMails(list)
+    return list
   }, [identityId, selectedAccount, selectedFolder])
 
   useEffect(() => {
@@ -242,11 +243,16 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   }, [newMailCount])
 
   // Mail tables can change from other windows (draft autosave/discard in the
-  // composer) — keep the list and folder counts in sync.
+  // composer) — keep the list and folder counts in sync. If the open message
+  // disappeared (e.g. its draft was discarded), drop the stale preview.
   useEffect(() => {
     const unsubscribe = window.nvelope.mail.onChanged((data) => {
       if (data.identityId !== identityId) return
-      loadMails()
+      void loadMails().then((list) => {
+        setSelectedMail((prev) =>
+          prev && !list.some((m) => m.innerEventId === prev.innerEventId) ? null : prev,
+        )
+      })
       loadFolders()
     })
     return unsubscribe
