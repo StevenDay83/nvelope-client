@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Menu, MenuItem, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Menu, MenuItem, nativeTheme, type MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { registerVaultHandlers, getAllUnlockedSessions } from './ipc/vaultHandlers'
@@ -44,6 +44,16 @@ let mainWindow: BrowserWindow | null = null
 const composeWindows = new Set<BrowserWindow>()
 let contactsWindow: BrowserWindow | null = null
 let aboutWindow: BrowserWindow | null = null
+
+// The UI is always dark — pin window chrome (and native dialogs where the
+// toolkit honors it) to dark instead of following the OS light/dark setting.
+nativeTheme.themeSource = 'dark'
+
+// Linux windows get no icon from the AppImage — it must be set per-window.
+// Harmless on macOS/Windows, which take the icon from the bundle/exe.
+function windowIcon(): string {
+  return path.join(app.getAppPath(), 'assets', 'icon.png')
+}
 
 // External links (mail bodies, iframe popups) open in the system browser,
 // never in an Electron window. Everything else is denied.
@@ -115,6 +125,7 @@ const createWindow = (): void => {
     minWidth: 900,
     minHeight: 600,
     title: 'nVelope Beta',
+    icon: windowIcon(),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -149,6 +160,7 @@ function createComposeWindow(data: Record<string, unknown>): BrowserWindow {
     minHeight: 400,
     title: 'Write: ' + (data.subject || '(no subject)'),
     parent: mainWindow ?? undefined,
+    icon: windowIcon(),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -184,6 +196,7 @@ function createContactsWindow(data: Record<string, unknown>): BrowserWindow {
     minHeight: 360,
     title: 'Address Book',
     parent: mainWindow ?? undefined,
+    icon: windowIcon(),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -231,6 +244,7 @@ function createAboutWindow(): void {
     title: 'About nVelope',
     autoHideMenuBar: true,
     parent: mainWindow ?? undefined,
+    icon: windowIcon(),
     webPreferences: {
       preload: resolvePreload(),
       contextIsolation: true,
