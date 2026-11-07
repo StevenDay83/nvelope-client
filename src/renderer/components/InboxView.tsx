@@ -331,6 +331,9 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   )
 
   const selectedFolderType = folders.find((f) => f.id === selectedFolder)?.type
+  // Drafts are always a flat message list and the toggle is hidden there —
+  // conversation grouping only obscures which item you're editing.
+  const effectiveConversationView = conversationView && selectedFolderType !== 'drafts'
 
   // Recipient list label for mail we sent (used in Sent/Outbox rows and headers)
   const getRecipientsDisplay = (mail: MailRecord): string => {
@@ -636,7 +639,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     setShowMoveMenu(false)
     setContextMenu(null)
     setThreadMails([mail])
-    if (!conversationView) {
+    if (!effectiveConversationView) {
       // Message-list mode: show exactly the selected message, not its thread.
       if (!mail.read) {
         await window.nvelope.db.mailMarkRead(identityId, mail.innerEventId, true)
@@ -669,7 +672,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
 
   // Keep an open conversation in sync when mail changes (e.g. a reply arrives)
   useEffect(() => {
-    if (!selectedMail || !conversationView) return
+    if (!selectedMail || !effectiveConversationView) return
     loadThread(selectedMail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mails])
@@ -756,13 +759,13 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   // Conversation mode: one row per thread showing the newest message.
   // Flat mode: every message, newest first.
   const displayMails = useMemo(() => {
-    if (!conversationView) return [...mails].sort((a, b) => b.createdAt - a.createdAt)
+    if (!effectiveConversationView) return [...mails].sort((a, b) => b.createdAt - a.createdAt)
     const result: MailRecord[] = []
     for (const [, items] of threadGroups) {
       result.push(items[0]!) // Show newest in thread
     }
     return result.sort((a, b) => b.createdAt - a.createdAt)
-  }, [threadGroups, mails, conversationView])
+  }, [threadGroups, mails, effectiveConversationView])
 
   const threadCount = (mail: MailRecord): number => {
     const tid = mail.threadId || mail.innerEventId
@@ -1020,16 +1023,18 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
               {isSearching ? `Search results` : selectedFolderName}
             </span>
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-neutral-600">{displayMails.length} {conversationView ? 'conversation' : 'message'}{displayMails.length !== 1 ? 's' : ''}</span>
-              <button
-                onClick={toggleConversationView}
-                title={conversationView ? 'Switch to message list' : 'Switch to conversation view'}
-                className={`rounded p-1 transition-colors ${conversationView ? 'text-blue-400 hover:bg-neutral-700' : 'text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300'}`}
-              >
-                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4-.8L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
-              </button>
+              <span className="text-xs text-neutral-600">{displayMails.length} {effectiveConversationView ? 'conversation' : 'message'}{displayMails.length !== 1 ? 's' : ''}</span>
+              {selectedFolderType !== 'drafts' && (
+                <button
+                  onClick={toggleConversationView}
+                  title={conversationView ? 'Switch to message list' : 'Switch to conversation view'}
+                  className={`rounded p-1 transition-colors ${conversationView ? 'text-blue-400 hover:bg-neutral-700' : 'text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300'}`}
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4-.8L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1063,7 +1068,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                         {getRowDisplay(mail)}
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {conversationView && threadCount(mail) > 1 && (
+                        {effectiveConversationView && threadCount(mail) > 1 && (
                           <span className="rounded-full bg-neutral-700 px-1.5 text-[10px] text-neutral-400">
                             {threadCount(mail)}
                           </span>
