@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { npubEncode } from 'nostr-tools/nip19'
 import SettingsPanel from './SettingsPanel'
 import MailBody from './MailBody'
+import ExternalReferenceList from './ExternalReferenceList'
 import type { ContactRecord, OutboxProgress } from '../../preload'
 
 // Welcome message pseudo-senders: the legacy 'nvelope' string (existing
@@ -243,15 +244,17 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   }, [newMailCount])
 
   // Mail tables can change from other windows (draft autosave/discard in the
-  // composer) — keep the list and folder counts in sync. If the open message
-  // disappeared (e.g. its draft was discarded), drop the stale preview.
+  // composer) — keep the list and folder counts in sync. Refresh the open
+  // message from the fresh list (a saving composer updates a draft preview
+  // live); if it disappeared (e.g. discarded), drop the stale preview.
   useEffect(() => {
     const unsubscribe = window.nvelope.mail.onChanged((data) => {
       if (data.identityId !== identityId) return
       void loadMails().then((list) => {
-        setSelectedMail((prev) =>
-          prev && !list.some((m) => m.innerEventId === prev.innerEventId) ? null : prev,
-        )
+        setSelectedMail((prev) => {
+          if (!prev) return prev
+          return list.find((m) => m.innerEventId === prev.innerEventId) ?? null
+        })
       })
       loadFolders()
     })
@@ -917,10 +920,14 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                   <div key={folder.id} className="group/folder relative">
                     <button
                       onClick={() => {
+                        const sameFolder = selectedFolder === folder.id
                         setSelectedFolder(folder.id)
                         setSelectedMail(null)
                         setSearchQuery('')
                         setIsSearching(false)
+                        // Re-clicking the current folder doesn't change state,
+                        // so reload explicitly to clear stale search results.
+                        if (sameFolder && isSearching) loadMails()
                       }}
                       className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm text-left transition-colors ${
                         isActive
@@ -1279,7 +1286,13 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                       return (
                         <div
                           key={m.innerEventId}
-                          className={`rounded-md border bg-neutral-900 ${expanded ? 'border-neutral-700' : 'border-neutral-800'}`}
+                          className={`rounded-md border ${
+                            m.innerEventId === selectedMail.innerEventId
+                              ? 'border-blue-500/60 bg-blue-500/5'
+                              : expanded
+                                ? 'border-neutral-700 bg-neutral-900'
+                                : 'border-neutral-800 bg-neutral-900'
+                          }`}
                         >
                           <button
                             onClick={() => toggleExpanded(m.innerEventId)}
@@ -1437,63 +1450,6 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
           onAccountsChanged={onAccountsChanged}
         />
       )}
-    </div>
-  )
-}
-
-const IMAGE_URL_RE = /\.(png|jpe?g|gif|webp)(\?|#|$)/i
-
-function linkLabel(url: string): string {
-  try {
-    const parsed = new URL(url)
-    const file = parsed.pathname.split('/').filter(Boolean).pop()
-    return file ? decodeURIComponent(file) : parsed.hostname
-  } catch {
-    return url
-  }
-}
-
-/** Renders a message's external references (SPEC §3.1): image links inline,
- *  everything else as a generic file+link chip that opens in the browser. */
-function ExternalReferenceList({ references }: { references: string[][] }) {
-  if (references.length === 0) return null
-  const open = (url: string) => window.nvelope.file.openExternal(url).catch((e) => console.error('Open link failed:', e))
-  return (
-    <div className="mt-4 border-t border-neutral-800 pt-3">
-      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500">Attachments</div>
-      <div className="flex flex-col gap-2">
-        {references.map((ref) => {
-          const url = ref[1]
-          if (IMAGE_URL_RE.test(url)) {
-            return (
-              <button key={url} onClick={() => open(url)} title={`Open ${url} in browser`} className="w-fit cursor-pointer">
-                <img
-                  src={url}
-                  alt={linkLabel(url)}
-                  className="max-h-64 max-w-full rounded-md border border-neutral-700 object-contain"
-                />
-                <span className="mt-1 block truncate text-left text-xs text-neutral-500">{linkLabel(url)}</span>
-              </button>
-            )
-          }
-          return (
-            <button
-              key={url}
-              onClick={() => open(url)}
-              title={`Open ${url} in browser`}
-              className="flex w-fit items-center gap-2 rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-xs text-neutral-300 hover:border-blue-600 hover:text-blue-300 transition-colors"
-            >
-              <svg className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span className="max-w-80 truncate">{linkLabel(url)}</span>
-              <svg className="h-3.5 w-3.5 shrink-0 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-              </svg>
-            </button>
-          )
-        })}
-      </div>
     </div>
   )
 }

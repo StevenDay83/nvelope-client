@@ -74,9 +74,12 @@ CREATE TABLE IF NOT EXISTS folders (
   name TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'user',
   sortOrder INTEGER NOT NULL DEFAULT 0,
-  createdAt INTEGER NOT NULL DEFAULT (unixepoch()),
-  UNIQUE(accountId, type)
+  createdAt INTEGER NOT NULL DEFAULT (unixepoch())
 );
+
+-- Special folders are unique per account; user folders are not (the old
+-- table-level UNIQUE(accountId, type) blocked a second custom folder).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_special ON folders(accountId, type) WHERE type != 'user';
 
 CREATE TABLE IF NOT EXISTS mail (
   innerEventId TEXT PRIMARY KEY,
@@ -173,6 +176,31 @@ export function registerDbHandlers(): void {
         db.exec(stmt)
       } catch { /* column already exists */ }
     }
+
+    // Old databases carry a table-level UNIQUE(accountId, type) on folders
+    // (as an autoindex), which rejects a second custom folder. Table
+    // constraints can't be altered in SQLite — rebuild the table without it.
+    const legacyFolderConstraint = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'sqlite_autoindex_folders_1'")
+      .get()
+    if (legacyFolderConstraint) {
+      db.pragma('foreign_keys = OFF')
+      db.transaction(() => {
+        db.exec(`CREATE TABLE folders_rebuild (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          accountId TEXT NOT NULL,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'user',
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL DEFAULT (unixepoch())
+        )`)
+        db.exec('INSERT INTO folders_rebuild (id, accountId, name, type, sortOrder, createdAt) SELECT id, accountId, name, type, sortOrder, createdAt FROM folders')
+        db.exec('DROP TABLE folders')
+        db.exec('ALTER TABLE folders_rebuild RENAME TO folders')
+      })()
+      db.pragma('foreign_keys = ON')
+    }
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_special ON folders(accountId, type) WHERE type != 'user'")
 
     // Clean up duplicate global folders from old schema (pre-UNIQUE constraint)
     const dupCheck = db.prepare(`

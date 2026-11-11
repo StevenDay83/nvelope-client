@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { npubEncode } from 'nostr-tools/nip19'
+import MailBody from './MailBody'
+import ExternalReferenceList from './ExternalReferenceList'
 import type { ContactRecord } from '../../preload'
 
 // Attachments are external http(s) links (SPEC §3.1 external_references) —
@@ -378,6 +380,14 @@ export default function Composer({
 
   const isMarkdown = format === 'markdown'
 
+  // Preview mode renders the body through the same pipeline the reader uses
+  // (markdown renderer / sanitized-HTML iframe / plaintext line breaks).
+  const [showPreview, setShowPreview] = useState(false)
+  const previewMessageData = useMemo(
+    () => JSON.stringify({ bodyText: body, messageType: 0, formats: { [format]: body } }),
+    [body, format],
+  )
+
   return (
     <div className="flex h-full flex-col">
       {/* Title bar / toolbar */}
@@ -437,6 +447,20 @@ export default function Composer({
           </button>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex overflow-hidden rounded-md border border-neutral-600 text-xs">
+            <button
+              onClick={() => setShowPreview(false)}
+              className={`px-2.5 py-1.5 transition-colors ${!showPreview ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'}`}
+            >
+              Write
+            </button>
+            <button
+              onClick={() => setShowPreview(true)}
+              className={`px-2.5 py-1.5 transition-colors ${showPreview ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'}`}
+            >
+              Preview
+            </button>
+          </div>
           {progress && (
             <span className="text-sm text-neutral-400">{progress}</span>
           )}
@@ -636,8 +660,8 @@ export default function Composer({
         </div>
       )}
 
-      {/* Formatting toolbar (markdown / html) */}
-      {isMarkdown && (
+      {/* Formatting toolbar (markdown / html) — write mode only */}
+      {isMarkdown && !showPreview && (
         <div className="flex items-center gap-1 border-b border-neutral-700 bg-neutral-800 px-3 py-1.5">
           <ToolbarButton onClick={() => insertFormat('**', '**')} title="Bold">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4h8a4 4 0 014 4 4 4 0 01-4 4H6V4zm0 8h9a4 4 0 014 4 4 4 0 01-4 4H6v-8z" /></svg>
@@ -668,7 +692,7 @@ export default function Composer({
           </ToolbarButton>
         </div>
       )}
-      {format === 'html' && (
+      {format === 'html' && !showPreview && (
         <div className="flex items-center gap-1 border-b border-neutral-700 bg-neutral-800 px-3 py-1.5">
           <ToolbarButton onClick={() => insertFormat('<strong>', '</strong>')} title="Bold">
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 4h8a4 4 0 014 4 4 4 0 01-4 4H6V4zm0 8h9a4 4 0 014 4 4 4 0 01-4 4H6v-8z" /></svg>
@@ -703,16 +727,29 @@ export default function Composer({
         </div>
       )}
 
-      {/* Body */}
+      {/* Body — write or rendered preview */}
       <div className="flex-1 overflow-hidden">
-        <textarea
-          ref={textareaRef}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder={format === 'html' ? '<p>Enter HTML here…</p>' : 'Write your message here…'}
-          className="h-full w-full resize-none bg-neutral-900 p-4 text-sm text-neutral-100 placeholder-neutral-600 outline-none"
-          spellCheck
-        />
+        {showPreview ? (
+          <div className="h-full overflow-y-auto bg-neutral-900 p-4">
+            {body || links.length > 0 ? (
+              <>
+                <MailBody mail={{ messageData: previewMessageData }} />
+                <ExternalReferenceList references={links.map((link) => ['http', link])} />
+              </>
+            ) : (
+              <span className="text-sm text-neutral-600">Nothing to preview yet</span>
+            )}
+          </div>
+        ) : (
+          <textarea
+            ref={textareaRef}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder={format === 'html' ? '<p>Enter HTML here…</p>' : 'Write your message here…'}
+            className="h-full w-full resize-none bg-neutral-900 p-4 text-sm text-neutral-100 placeholder-neutral-600 outline-none"
+            spellCheck
+          />
+        )}
       </div>
 
       {/* Footer status */}

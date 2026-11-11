@@ -121,7 +121,12 @@ function renderInline(text: string, refs: Refs): string {
 
 const HEADING_SIZES = ['text-2xl', 'text-xl', 'text-lg', 'text-base', 'text-sm', 'text-sm']
 
-export function renderMarkdown(md: string): string {
+interface RenderOptions {
+  // Plaintext mail: every newline is a line break (no markdown soft-wrap).
+  breaks?: boolean
+}
+
+export function renderMarkdown(md: string, opts: RenderOptions = {}): string {
   if (!md) return ''
 
   // Reference definitions ([id]: url "title") can appear anywhere; collect
@@ -167,11 +172,12 @@ export function renderMarkdown(md: string): string {
 
   const flushPara = () => {
     if (paraBuffer.length > 0) {
-      // Consecutive lines form one paragraph; two trailing spaces = hard break
+      // Consecutive lines form one paragraph; two trailing spaces = hard break.
+      // With breaks (plaintext mail), every line ends in a break instead.
       const parts = paraBuffer.map((l) => renderInline(l.trim(), refs))
       let content = ''
       for (let j = 0; j < parts.length; j++) {
-        if (j > 0) content += / {2,}$/.test(paraBuffer[j - 1]!) ? '<br />' : ' '
+        if (j > 0) content += opts.breaks || / {2,}$/.test(paraBuffer[j - 1]!) ? '<br />' : ' '
         content += parts[j]
       }
       out.push(`<p class="my-2 leading-relaxed text-neutral-200">${content}</p>`)
@@ -243,7 +249,7 @@ export function renderMarkdown(md: string): string {
         i++
       }
       i--
-      out.push(`<blockquote class="my-2 border-l-4 border-blue-500 pl-3 italic text-neutral-300">${renderMarkdown(quoted.join('\n'))}</blockquote>`)
+      out.push(`<blockquote class="my-2 border-l-4 border-blue-500 pl-3 italic text-neutral-300">${renderMarkdown(quoted.join('\n'), opts)}</blockquote>`)
       continue
     }
 

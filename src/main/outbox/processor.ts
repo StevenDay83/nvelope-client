@@ -130,13 +130,25 @@ async function pump(identityId: string): Promise<void> {
   if (!session) return
   const db = getDb(identityId)
 
-  for (const account of session.payload.accounts) {
-    const queued = dao.getQueuedMail(db, account.pubkey)
-    for (const row of queued) {
-      // Session may have locked mid-queue
-      if (!getUnlockedSession(identityId)) return
-      await processRow(identityId, account.pubkey, account.nsec, row, session.payload.settings as Record<string, unknown>)
+  // kickOutbox is a no-op while a pump runs, and getQueuedMail is only a
+  // snapshot — a message queued mid-mining would otherwise sit pending
+  // forever. Re-snapshot until nothing new remains. Rows attempted in this
+  // run (failures land back in 'pending') are skipped so we can't spin.
+  const attempted = new Set<string>()
+  for (;;) {
+    if (!getUnlockedSession(identityId)) return
+    let processedAny = false
+    for (const account of session.payload.accounts) {
+      const queued = dao.getQueuedMail(db, account.pubkey).filter((row) => !attempted.has(row.innerEventId))
+      for (const row of queued) {
+        // Session may have locked mid-queue
+        if (!getUnlockedSession(identityId)) return
+        attempted.add(row.innerEventId)
+        processedAny = true
+        await processRow(identityId, account.pubkey, account.nsec, row, session.payload.settings as Record<string, unknown>)
+      }
     }
+    if (!processedAny) return
   }
 }
 
