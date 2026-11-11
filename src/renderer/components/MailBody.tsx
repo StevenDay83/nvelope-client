@@ -17,10 +17,11 @@ function parseMailBody(messageData: string): { html: string; isHtml: boolean; is
     if (data.bodyText) {
       // bodyText is filled with md > plaintext > html priority — render
       // markdown/plaintext through the markdown renderer, html stays raw
-      // for the sanitizer + iframe path below. Plaintext gets breaks:true —
-      // every typed newline is a line break, not a markdown soft-wrap.
+      // for the sanitizer + iframe path below. Both get breaks:true (the
+      // Obsidian/GitHub convention): every typed newline is a line break,
+      // not a CommonMark soft-wrap. Markdown keeps the UI font.
       if (hasMarkdown) {
-        return { html: renderMarkdown(data.bodyText), isHtml: false, isPlaintext: false }
+        return { html: renderMarkdown(data.bodyText, { breaks: true }), isHtml: false, isPlaintext: false }
       }
       if (fmtList.includes('plaintext')) {
         return { html: renderMarkdown(data.bodyText, { breaks: true }), isHtml: false, isPlaintext: true }
@@ -28,14 +29,14 @@ function parseMailBody(messageData: string): { html: string; isHtml: boolean; is
       return { html: data.bodyText, isHtml: hasHtml || !!data.messageType?.html, isPlaintext: false }
     }
     const mt = data.messageType ?? {}
-    if (mt.md) return { html: renderMarkdown(atob(mt.md)), isHtml: false, isPlaintext: false }
+    if (mt.md) return { html: renderMarkdown(atob(mt.md), { breaks: true }), isHtml: false, isPlaintext: false }
     if (mt.plaintext) return { html: renderMarkdown(atob(mt.plaintext), { breaks: true }), isHtml: false, isPlaintext: true }
     if (mt.html) return { html: atob(mt.html), isHtml: true, isPlaintext: false }
     // typeof (not truthiness) so an empty-string body still counts as a body —
     // otherwise a blank draft falls through and renders raw messageData JSON.
     if (typeof formats?.html === 'string') return { html: formats.html, isHtml: true, isPlaintext: false }
-    if (typeof formats?.markdown === 'string') return { html: renderMarkdown(formats.markdown), isHtml: false, isPlaintext: false }
-    if (typeof formats?.md === 'string') return { html: renderMarkdown(formats.md), isHtml: false, isPlaintext: false }
+    if (typeof formats?.markdown === 'string') return { html: renderMarkdown(formats.markdown, { breaks: true }), isHtml: false, isPlaintext: false }
+    if (typeof formats?.md === 'string') return { html: renderMarkdown(formats.md, { breaks: true }), isHtml: false, isPlaintext: false }
     if (typeof formats?.plaintext === 'string') return { html: renderMarkdown(formats.plaintext, { breaks: true }), isHtml: false, isPlaintext: true }
     return { html: renderMarkdown(messageData), isHtml: false, isPlaintext: false }
   } catch {
