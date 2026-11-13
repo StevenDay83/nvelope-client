@@ -174,6 +174,9 @@ async function processRow(
   }
 
   dao.setMailState(db, innerEventId, 'processing')
+  // The row's timestamp means "sent at", not "queued at" — a message can sit
+  // in the outbox (queue, app restarts) long after it was queued.
+  dao.setMailCreatedAt(db, innerEventId, Math.floor(Date.now() / 1000))
   const controller = new AbortController()
   controllers.set(innerEventId, controller)
 

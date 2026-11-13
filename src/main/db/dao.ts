@@ -80,6 +80,7 @@ export function insertMail(db: Database.Database, mail: MailRecord): void {
       spamScore=excluded.spamScore,
       recipientPubkey=excluded.recipientPubkey,
       subject=excluded.subject,
+      createdAt=excluded.createdAt,
       messageData=excluded.messageData
   `)
   stmt.run(
@@ -195,6 +196,11 @@ export function getQueuedMail(db: Database.Database, accountId: string): MailRec
 
 export function setMailState(db: Database.Database, innerEventId: string, state: MailRecord['state']): void {
   db.prepare('UPDATE mail SET state = ? WHERE innerEventId = ?').run(state, innerEventId)
+}
+
+/** Stamp a row's send time — used when the outbox starts processing it. */
+export function setMailCreatedAt(db: Database.Database, innerEventId: string, createdAt: number): void {
+  db.prepare('UPDATE mail SET createdAt = ? WHERE innerEventId = ?').run(createdAt, innerEventId)
 }
 
 export function updateMailMessageData(db: Database.Database, innerEventId: string, messageData: string): void {
