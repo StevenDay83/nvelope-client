@@ -4,11 +4,11 @@ import MailBody from './MailBody'
 import ExternalReferenceList from './ExternalReferenceList'
 import RecipientChipsInput, {
   chipFromContact,
-  chipLabelForContact,
   parseChips,
   serializeChips,
   type RecipientChip,
 } from './RecipientChipsInput'
+import { chipLabelForContact } from '../lib/identityLabel'
 import type { ContactRecord } from '../../preload'
 
 // Attachments are external http(s) links (SPEC §3.1 external_references) —

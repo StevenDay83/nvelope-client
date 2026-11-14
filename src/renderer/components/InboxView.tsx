@@ -3,6 +3,7 @@ import { npubEncode } from 'nostr-tools/nip19'
 import SettingsPanel from './SettingsPanel'
 import MailBody from './MailBody'
 import ExternalReferenceList from './ExternalReferenceList'
+import IdentityChip from './IdentityChip'
 import type { ContactRecord, OutboxProgress } from '../../preload'
 
 // Welcome message pseudo-senders: the legacy 'nvelope' string (existing
@@ -364,19 +365,6 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     return toList
   }
 
-  const recipientLabel = (hex: string): string => {
-    if (hex === selectedAccount) return 'You'
-    const contact = contactsByPubkey[hex]
-    return contact ? contactLabel(contact, hex) : formatNpub(hex)
-  }
-
-  // Full "To:" header line — every recipient, not just the first
-  const getToLine = (mail: MailRecord): string => {
-    const list = getRecipientHexList(mail)
-    if (list.length === 0) return '(no recipient)'
-    return list.map(recipientLabel).join(', ')
-  }
-
   // Reply-all targets: original sender + all original recipients, minus yourself.
   // Only meaningful for direct mail sent to multiple recipients.
   const getReplyAllTargets = (mail: MailRecord): string[] | null => {
@@ -724,13 +712,13 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     return formatNpub(mail.senderPubkey)
   }
 
-  const handleAddSenderToContacts = (mail: MailRecord) => {
+  const handleAddContact = (pubkey: string) => {
     const acct = accounts.find((a) => a.pubkey === selectedAccount)
     window.nvelope.contactsWindow.open({
       identityId,
       accountId: selectedAccount,
       accountDisplayName: acct?.displayName || undefined,
-      prefillPubkey: mail.senderPubkey,
+      prefillPubkey: pubkey,
     })
   }
 
@@ -791,6 +779,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   const selectedIsDraft = selectedMail?.state === 'draft'
   // Drafts are from yourself — show the account name rather than a npub.
   const selfDisplay = accounts.find((a) => a.pubkey === selectedAccount)?.displayName || 'You'
+  // Every account in the identity renders as "You" in sender/recipient chips.
+  const selfPubkeys = useMemo(() => accounts.map((a) => a.pubkey), [accounts])
 
   return (
     <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
@@ -1316,18 +1306,33 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                           </button>
                           {expanded && (
                             <div className="border-t border-neutral-800 p-4">
-                              <div className="mb-2 space-y-0.5 text-xs text-neutral-500">
-                                <div className="break-words">
-                                  <span className="text-neutral-600">From:</span>{' '}
-                                  {senderName}
-                                  {!isSelf && !isNvelopeWelcomeSender(m.senderPubkey) && (
-                                    <span className="font-mono text-neutral-600">{' '}&lt;{formatNpub(m.senderPubkey)}&gt;</span>
-                                  )}
+                              <div className="mb-2 space-y-1 text-xs text-neutral-500">
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span className="text-neutral-600">From:</span>
+                                  <IdentityChip
+                                    pubkey={m.senderPubkey}
+                                    contactsByPubkey={contactsByPubkey}
+                                    selfPubkeys={selfPubkeys}
+                                    labelOverride={isNvelopeWelcomeSender(m.senderPubkey) ? 'nVelope' : undefined}
+                                    onAddContact={handleAddContact}
+                                  />
                                 </div>
                                 {!m.isBroadcast && (
-                                  <div className="break-words">
-                                    <span className="text-neutral-600">To:</span>{' '}
-                                    {getToLine(m)}
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <span className="text-neutral-600">To:</span>
+                                    {getRecipientHexList(m).length === 0 ? (
+                                      <span>(no recipient)</span>
+                                    ) : (
+                                      getRecipientHexList(m).map((hex) => (
+                                        <IdentityChip
+                                          key={hex}
+                                          pubkey={hex}
+                                          contactsByPubkey={contactsByPubkey}
+                                          selfPubkeys={selfPubkeys}
+                                          onAddContact={handleAddContact}
+                                        />
+                                      ))
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -1378,30 +1383,45 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 text-sm font-medium text-neutral-200">
-                          {selectedIsDraft ? selfDisplay : getSenderDisplay(selectedMail)}
+                          <IdentityChip
+                            pubkey={selectedIsDraft ? selectedAccount : selectedMail.senderPubkey}
+                            contactsByPubkey={contactsByPubkey}
+                            selfPubkeys={selfPubkeys}
+                            labelOverride={
+                              !selectedIsDraft && isNvelopeWelcomeSender(selectedMail.senderPubkey)
+                                ? 'nVelope'
+                                : undefined
+                            }
+                            onAddContact={handleAddContact}
+                          />
                           {selectedIsDraft && (
                             <span className="rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">Draft</span>
                           )}
-                          {!selectedIsDraft && !isNvelopeWelcomeSender(selectedMail.senderPubkey) && !contactsByPubkey[selectedMail.senderPubkey] && (
-                            <button
-                              onClick={() => handleAddSenderToContacts(selectedMail)}
-                              title="Add sender to address book"
-                              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 border border-neutral-700 hover:text-blue-300 hover:border-blue-600 transition-colors"
-                            >
-                              + Contact
-                            </button>
-                          )}
                         </div>
-                        <div className="text-xs text-neutral-500 mt-0.5 break-words">
-                          <span className="text-neutral-600">To:</span>{' '}
-                          {selectedIsDraft
-                            ? getDraftField(selectedMail, 'recipientNpub') || '(no recipient)'
-                            : selectedMail.isBroadcast
-                              ? (() => {
-                                  const acct = accounts.find((a) => a.pubkey === selectedAccount)
-                                  return acct?.displayName ? `${acct.displayName} <${formatNpub(selectedAccount)}>` : formatNpub(selectedAccount)
-                                })()
-                              : getToLine(selectedMail)}
+                        <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+                          <span className="text-neutral-600">To:</span>
+                          {selectedIsDraft ? (
+                            <span>{getDraftField(selectedMail, 'recipientNpub') || '(no recipient)'}</span>
+                          ) : selectedMail.isBroadcast ? (
+                            <IdentityChip
+                              pubkey={selectedAccount}
+                              contactsByPubkey={contactsByPubkey}
+                              selfPubkeys={selfPubkeys}
+                              onAddContact={handleAddContact}
+                            />
+                          ) : getRecipientHexList(selectedMail).length === 0 ? (
+                            <span>(no recipient)</span>
+                          ) : (
+                            getRecipientHexList(selectedMail).map((hex) => (
+                              <IdentityChip
+                                key={hex}
+                                pubkey={hex}
+                                contactsByPubkey={contactsByPubkey}
+                                selfPubkeys={selfPubkeys}
+                                onAddContact={handleAddContact}
+                              />
+                            ))
+                          )}
                         </div>
                         <div className="text-xs text-neutral-500 mt-0.5">
                           {formatDateFull(selectedMail.createdAt)}
