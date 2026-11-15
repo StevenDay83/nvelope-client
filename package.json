@@ -22,7 +22,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.20",
-    "electron": "^40.0.0",
+    "electron": "^45.0.0",
     "electron-builder": "^26.0.0",
     "electron-vite": "^3.0.0",
     "eslint": "^9.0.0",
@@ -32,7 +32,7 @@
     "vite": "^6.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.0.0",
+    "better-sqlite3": "^13.2.0",
     "dompurify": "^3.4.17",
     "nostr-tools": "^2.19.4",
     "nvelope-core": "^1.1.1",
