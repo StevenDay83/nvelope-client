@@ -17,6 +17,8 @@ export default function ComposeWindow({ data }: Props) {
         initialBody={data.body ? String(data.body) : undefined}
         initialFormat={(data.format as 'plaintext' | 'markdown' | 'html') ?? 'plaintext'}
         initialThreadId={data.threadId ? String(data.threadId) : undefined}
+        initialRepliedTo={data.repliedTo ? String(data.repliedTo) : undefined}
+        initialForwardedOf={data.forwardedOf ? String(data.forwardedOf) : undefined}
         initialDraftId={data.draftId ? String(data.draftId) : undefined}
         windowMode
         onClose={() => window.close()}

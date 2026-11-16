@@ -38,6 +38,10 @@ export interface OutgoingPayload {
   format: 'plaintext' | 'markdown' | 'html'
   links?: string[]
   threadId?: string
+  // Local-only markers (stored in messageData, never on the wire) so the
+  // inbox can show replied/forwarded indicators on the original message.
+  repliedTo?: string
+  forwardedOf?: string
 }
 
 interface SendPayloadWire {
@@ -366,6 +370,8 @@ export function registerOutboxHandlers(): void {
           bodyText: payload.body,
           externalReferences: links.map((link) => ['http', link]),
           hasAttachments: links.length > 0,
+          repliedTo: payload.repliedTo ?? null,
+          forwardedOf: payload.forwardedOf ?? null,
           sendPayload: wire,
         }),
       })

@@ -25,6 +25,8 @@ interface Props {
   initialBody?: string
   initialFormat?: 'plaintext' | 'markdown' | 'html'
   initialThreadId?: string
+  initialRepliedTo?: string
+  initialForwardedOf?: string
   initialDraftId?: string
   windowMode?: boolean
   onClose: () => void
@@ -41,6 +43,8 @@ export default function Composer({
   initialBody = '',
   initialFormat = 'plaintext',
   initialThreadId,
+  initialRepliedTo,
+  initialForwardedOf,
   initialDraftId,
   onClose,
   onSent,
@@ -233,6 +237,8 @@ export default function Composer({
         format,
         links: links.length > 0 ? links : undefined,
         threadId: initialThreadId,
+        repliedTo: initialRepliedTo,
+        forwardedOf: initialForwardedOf,
       })
       if (draftId) {
         try {

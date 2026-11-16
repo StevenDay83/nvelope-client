@@ -148,6 +148,10 @@ export interface SendAPI {
       format: 'plaintext' | 'markdown' | 'html'
       links?: string[]
       threadId?: string
+      // Local-only markers (stored in messageData, never on the wire) so the
+      // inbox can show replied/forwarded indicators on the original message.
+      repliedTo?: string
+      forwardedOf?: string
     },
   ) => Promise<{ innerEventId: string }>
   cancel: (identityId: string, innerEventId: string) => Promise<void>

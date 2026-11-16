@@ -132,6 +132,9 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [conversationView, setConversationView] = useState(true)
   const [outboxProgress, setOutboxProgress] = useState<Record<string, OutboxProgress>>({})
+  // innerEventId → 'reply' | 'forward': the latest sent action targeting each
+  // original message (drives the flat list's replied/forwarded icons).
+  const [sentActions, setSentActions] = useState<Map<string, 'reply' | 'forward'>>(new Map())
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; mail: MailRecord } | null>(null)
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -207,12 +210,43 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     setFolderUnreadCounts(counts)
   }, [identityId, selectedAccount, selectedFolder])
 
+  // Reply/forward markers recorded on sent rows (messageData.repliedTo /
+  // forwardedOf). Sends predate the fields simply show no icon.
+  const loadSentActions = useCallback(async () => {
+    if (!identityId || !selectedAccount) return
+    try {
+      const rows = (
+        await Promise.all(
+          ['published', 'pending', 'processing'].map(
+            (s) => window.nvelope.db.mailGetByState(identityId, selectedAccount, s),
+          ),
+        )
+      ).flat() as MailRecord[]
+      const latest = new Map<string, { action: 'reply' | 'forward'; at: number }>()
+      for (const row of rows) {
+        try {
+          const data = JSON.parse(row.messageData)
+          for (const [field, action] of [['repliedTo', 'reply'], ['forwardedOf', 'forward']] as const) {
+            const target = data[field]
+            if (typeof target !== 'string' || !target) continue
+            const prev = latest.get(target)
+            if (!prev || row.createdAt > prev.at) latest.set(target, { action, at: row.createdAt })
+          }
+        } catch { /* unparseable row — skip */ }
+      }
+      setSentActions(new Map([...latest].map(([k, v]) => [k, v.action])))
+    } catch (e) {
+      console.error('[inbox] failed to load sent actions:', e)
+    }
+  }, [identityId, selectedAccount])
+
   const loadMails = useCallback(async () => {
     if (!selectedAccount || selectedFolder === null) return [] as MailRecord[]
     const list = (await window.nvelope.db.mailGetByFolder(identityId, selectedAccount, selectedFolder)) as MailRecord[]
     setMails(list)
+    loadSentActions()
     return list
-  }, [identityId, selectedAccount, selectedFolder])
+  }, [identityId, selectedAccount, selectedFolder, loadSentActions])
 
   useEffect(() => {
     loadFolders()
@@ -519,6 +553,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       format: 'plaintext',
       // SPEC §3.1: replies propagate the thread key unchanged
       threadId: mail.threadId || mail.innerEventId,
+      // Local marker for the flat list's "you replied" indicator
+      repliedTo: mail.innerEventId,
     })
   }
 
@@ -541,6 +577,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       subject: fwdSubject,
       body: fwdBody,
       format: 'plaintext',
+      // Local marker for the flat list's "you forwarded" indicator
+      forwardedOf: mail.innerEventId,
     })
   }
 
@@ -568,6 +606,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       format: 'plaintext',
       // SPEC §3.1: replies propagate the thread key unchanged
       threadId: mail.threadId || mail.innerEventId,
+      // Local marker for the flat list's "you replied" indicator
+      repliedTo: mail.innerEventId,
     })
   }
 
@@ -1061,8 +1101,22 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                     } ${mail.read ? 'text-neutral-400' : 'text-white'}`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className={`text-sm truncate ${mail.read ? 'font-normal' : 'font-semibold'}`}>
-                        {getRowDisplay(mail)}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        {!effectiveConversationView && sentActions.get(mail.innerEventId) === 'reply' && (
+                          <svg className="h-3.5 w-3.5 shrink-0 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <title>You replied</title>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                          </svg>
+                        )}
+                        {!effectiveConversationView && sentActions.get(mail.innerEventId) === 'forward' && (
+                          <svg className="h-3.5 w-3.5 shrink-0 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <title>You forwarded</title>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                          </svg>
+                        )}
+                        <span className={`text-sm truncate ${mail.read ? 'font-normal' : 'font-semibold'}`}>
+                          {getRowDisplay(mail)}
+                        </span>
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
                         {effectiveConversationView && threadCount(mail) > 1 && (
