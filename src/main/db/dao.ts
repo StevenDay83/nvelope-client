@@ -119,6 +119,20 @@ export function countUnreadByFolder(db: Database.Database, accountId: string, fo
   return row.c
 }
 
+/** Total rows in a folder — the Outbox badge counts queued mail, not unread. */
+export function countByFolder(db: Database.Database, accountId: string, folderId: number): number {
+  const stmt = db.prepare('SELECT COUNT(*) as c FROM mail WHERE accountId = ? AND folderId = ?')
+  const row = stmt.get(accountId, folderId) as { c: number }
+  return row.c
+}
+
+/** Rows actively being mined/sent — drives the quit/logout outbox warning. */
+export function countProcessing(db: Database.Database): number {
+  const stmt = db.prepare("SELECT COUNT(*) as c FROM mail WHERE state = 'processing'")
+  const row = stmt.get() as { c: number }
+  return row.c
+}
+
 export function searchMail(db: Database.Database, accountId: string, query: string): MailRecord[] {
   const like = `%${query}%`
   const stmt = db.prepare(`

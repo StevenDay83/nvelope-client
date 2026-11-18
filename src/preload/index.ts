@@ -56,6 +56,7 @@ export interface DbAPI {
   mailGetByState: (identityId: string, accountId: string, state: string) => Promise<unknown[]>
   mailGetByThread: (identityId: string, accountId: string, threadId: string) => Promise<unknown[]>
   mailCountUnread: (identityId: string, accountId: string, folderId: number) => Promise<number>
+  mailCount: (identityId: string, accountId: string, folderId: number) => Promise<number>
   mailSearch: (identityId: string, accountId: string, query: string) => Promise<unknown[]>
   mailMarkRead: (identityId: string, innerEventId: string, read: boolean) => Promise<void>
   mailToggleMarked: (identityId: string, innerEventId: string) => Promise<boolean>
@@ -275,6 +276,7 @@ const dbAPI: DbAPI = {
   mailGetByState: (identityId, accountId, state) => ipcRenderer.invoke('db:mail:getByState', identityId, accountId, state),
   mailGetByThread: (identityId, accountId, threadId) => ipcRenderer.invoke('db:mail:getByThread', identityId, accountId, threadId),
   mailCountUnread: (identityId, accountId, folderId) => ipcRenderer.invoke('db:mail:countUnread', identityId, accountId, folderId),
+  mailCount: (identityId, accountId, folderId) => ipcRenderer.invoke('db:mail:count', identityId, accountId, folderId),
   mailSearch: (identityId, accountId, query) => ipcRenderer.invoke('db:mail:search', identityId, accountId, query),
   mailMarkRead: (identityId, innerEventId, read) => ipcRenderer.invoke('db:mail:markRead', identityId, innerEventId, read),
   mailToggleMarked: (identityId, innerEventId) => ipcRenderer.invoke('db:mail:toggleMarked', identityId, innerEventId),

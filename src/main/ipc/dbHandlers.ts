@@ -283,6 +283,10 @@ export function registerDbHandlers(): void {
     return dao.countUnreadByFolder(getDb(identityId), accountId, folderId)
   })
 
+  ipcMain.handle('db:mail:count', async (_event, identityId: string, accountId: string, folderId: number) => {
+    return dao.countByFolder(getDb(identityId), accountId, folderId)
+  })
+
   ipcMain.handle('db:mail:search', async (_event, identityId: string, accountId: string, query: string) => {
     return dao.searchMail(getDb(identityId), accountId, query)
   })

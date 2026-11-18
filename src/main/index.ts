@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, shell, Menu, MenuItem, nativeTheme, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, Menu, MenuItem, nativeTheme, type MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { registerVaultHandlers, getAllUnlockedSessions } from './ipc/vaultHandlers'
-import { registerDbHandlers } from './ipc/dbHandlers'
+import { registerDbHandlers, getDb, closeAllDbs } from './ipc/dbHandlers'
 import { registerFileHandlers } from './ipc/fileHandlers'
 import { registerCertHandlers } from './ipc/certHandlers'
 import { registerBenchmarkHandlers } from './ipc/benchmarkHandlers'
@@ -16,7 +16,7 @@ import { registerSubscriptionHandlers } from './ipc/subscriptionHandlers'
 import { registerRelayListHandlers } from './ipc/relayListHandlers'
 import { registerBlossomHandlers } from './ipc/blossomHandlers'
 import { stopAllScans } from './relay/scanner'
-import { closeAllDbs } from './ipc/dbHandlers'
+import * as dao from './db/dao'
 
 function resolvePreload(): string {
   // electron-vite places built artifacts under out/main/ (main) and out/preload/ (preload).
@@ -44,6 +44,46 @@ let mainWindow: BrowserWindow | null = null
 const composeWindows = new Set<BrowserWindow>()
 let contactsWindow: BrowserWindow | null = null
 let aboutWindow: BrowserWindow | null = null
+
+// Set when the user confirms leaving with outbox mail still processing, so the
+// close -> app.quit() -> before-quit chain doesn't ask twice (Linux/Windows
+// quit when the main window closes; macOS quits via before-quit directly).
+let closeApproved = false
+
+const PROCESSING_WARNING =
+  'There are one or more messages being processed in the Outbox. Leaving will halt processing the message.'
+
+// Any unlocked identity with mail mid-processing (PoW mining / relay publish)?
+// Pending (queued) rows resume on next launch via outbox recovery, so they
+// don't block leaving.
+function hasProcessingOutboxMail(): boolean {
+  try {
+    for (const session of getAllUnlockedSessions()) {
+      if (dao.countProcessing(getDb(session.identityId)) > 0) return true
+    }
+  } catch (e) {
+    console.error('[main] outbox processing check failed:', e)
+  }
+  return false
+}
+
+// Returns true when it's OK to proceed with closing/quitting.
+function confirmLeaveWithProcessing(parent: BrowserWindow | null): boolean {
+  if (!hasProcessingOutboxMail()) return true
+  const options = {
+    type: 'warning' as const,
+    buttons: ['Cancel', 'OK'],
+    defaultId: 0,
+    cancelId: 0,
+    message: PROCESSING_WARNING,
+  }
+  const choice = parent
+    ? dialog.showMessageBoxSync(parent, options)
+    : dialog.showMessageBoxSync(options)
+  if (choice === 0) return false
+  closeApproved = true
+  return true
+}
 
 // The UI is always dark — pin window chrome (and native dialogs where the
 // toolkit honors it) to dark instead of following the OS light/dark setting.
@@ -137,6 +177,13 @@ const createWindow = (): void => {
   setMainWindowForRelay(mainWindow)
   guardExternalNavigation(mainWindow)
   attachContextMenu(mainWindow)
+
+  closeApproved = false
+  mainWindow.on('close', (event) => {
+    if (!closeApproved && !confirmLeaveWithProcessing(mainWindow)) {
+      event.preventDefault()
+    }
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -339,7 +386,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+// Fires before any window 'close' on Cmd+Q / menu Quit, so the guard lives
+// here too — and cleanup must not run unless the quit actually proceeds.
+app.on('before-quit', (event) => {
+  if (!closeApproved && !confirmLeaveWithProcessing(mainWindow)) {
+    event.preventDefault()
+    return
+  }
   stopAllScans()
   closeAllDbs()
 })

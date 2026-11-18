@@ -202,10 +202,14 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       const inbox = list.find((f) => f.type === 'inbox')
       setSelectedFolder(inbox?.id ?? list[0]!.id)
     }
-    // Load unread counts for each folder
+    // Load unread counts for each folder; the outbox badge shows the total
+    // (queued + processing), matching how a user thinks about that folder.
     const counts: Record<number, number> = {}
     for (const folder of list) {
-      counts[folder.id] = await window.nvelope.db.mailCountUnread(identityId, selectedAccount, folder.id)
+      counts[folder.id] =
+        folder.type === 'outbox'
+          ? await window.nvelope.db.mailCount(identityId, selectedAccount, folder.id)
+          : await window.nvelope.db.mailCountUnread(identityId, selectedAccount, folder.id)
     }
     setFolderUnreadCounts(counts)
   }, [identityId, selectedAccount, selectedFolder])
@@ -438,6 +442,27 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       setScanning(false)
       setTimeout(() => setScanResult(''), 5000)
     }
+  }
+
+  // Warn before locking out while any outbox message is actively being
+  // processed (PoW mining / relay publish). Pending messages resume on the
+  // next launch via outbox recovery, so only 'processing' blocks.
+  const handleLock = async () => {
+    try {
+      for (const account of accounts) {
+        const processing = await window.nvelope.db.mailGetByState(identityId, account.pubkey, 'processing')
+        if (processing.length > 0) {
+          const ok = window.confirm(
+            'There are one or more messages being processed in the Outbox. Leaving will halt processing the message.',
+          )
+          if (!ok) return
+          break
+        }
+      }
+    } catch (e) {
+      console.error('[inbox] outbox processing check failed:', e)
+    }
+    onLock()
   }
 
   const handleMarkRead = async (mail: MailRecord, read: boolean) => {
@@ -923,7 +948,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
             </svg>
           </button>
           <button
-            onClick={onLock}
+            onClick={() => { void handleLock() }}
             className="rounded-md border border-neutral-600 bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700 transition-colors"
           >
             Logout
