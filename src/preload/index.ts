@@ -131,6 +131,10 @@ export interface MailListenerAPI {
   onChanged: (callback: (data: { identityId: string }) => void) => () => void
 }
 
+export interface LayoutAPI {
+  onReset: (callback: () => void) => () => void
+}
+
 export interface SettingsAPI {
   get: (key: string) => Promise<unknown>
   set: (key: string, value: unknown) => Promise<void>
@@ -341,6 +345,14 @@ const mailListenerAPI: MailListenerAPI = {
   },
 }
 
+const layoutAPI: LayoutAPI = {
+  onReset: (callback) => {
+    const handler = () => callback()
+    ipcRenderer.on('layout:reset', handler)
+    return () => ipcRenderer.removeListener('layout:reset', handler)
+  },
+}
+
 const settingsAPI: SettingsAPI = {
   get: (key) => ipcRenderer.invoke('settings:get', key),
   set: (key, value) => ipcRenderer.invoke('settings:set', key, value),
@@ -408,9 +420,9 @@ const contactsListenerAPI: ContactsListenerAPI = {
   getAvatar: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:getAvatar', identityId, accountId, pubkey),
 }
 
-contextBridge.exposeInMainWorld('nvelope', { app: appAPI, vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, relayList: relayListAPI, mail: mailListenerAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, blossom: blossomAPI, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
+contextBridge.exposeInMainWorld('nvelope', { app: appAPI, vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, relayList: relayListAPI, mail: mailListenerAPI, layout: layoutAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, blossom: blossomAPI, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
 
-export type NvelopeAPI = { app: AppAPI; vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; relayList: RelayListAPI; mail: MailListenerAPI; settings: SettingsAPI; send: SendAPI; outbox: OutboxAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; blossom: BlossomAPI; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
+export type NvelopeAPI = { app: AppAPI; vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; relayList: RelayListAPI; mail: MailListenerAPI; layout: LayoutAPI; settings: SettingsAPI; send: SendAPI; outbox: OutboxAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; blossom: BlossomAPI; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
 
 declare global {
   interface Window {

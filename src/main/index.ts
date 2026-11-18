@@ -332,7 +332,32 @@ function installApplicationMenu(): void {
     })
   }
   template.push({ label: 'File', submenu: [isMac ? { role: 'close' as const } : { role: 'quit' as const }] })
-  template.push({ role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' })
+  // Explicit View menu (was the viewMenu role) so we can add Layout → Reset
+  // Current Layout, which tells the renderer to restore default pane widths.
+  template.push({ role: 'editMenu' }, {
+    label: 'View',
+    submenu: [
+      { role: 'reload' },
+      { role: 'forceReload' },
+      { role: 'toggleDevTools' },
+      { type: 'separator' },
+      { role: 'resetZoom' },
+      { role: 'zoomIn' },
+      { role: 'zoomOut' },
+      { type: 'separator' },
+      {
+        label: 'Layout',
+        submenu: [
+          {
+            label: 'Reset Current Layout',
+            click: () => mainWindow?.webContents.send('layout:reset'),
+          },
+        ],
+      },
+      { type: 'separator' },
+      { role: 'togglefullscreen' },
+    ],
+  }, { role: 'windowMenu' })
   const helpSubmenu: MenuItemConstructorOptions[] = []
   if (!isMac) helpSubmenu.push(aboutItem)
   helpSubmenu.push(

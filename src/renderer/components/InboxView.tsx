@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { npubEncode } from 'nostr-tools/nip19'
 import SettingsPanel from './SettingsPanel'
 import MailBody from './MailBody'
@@ -13,6 +13,14 @@ const isNvelopeWelcomeSender = (pk: string | null | undefined): boolean =>
   !!pk && NVELOPE_WELCOME_SENDERS.has(pk)
 // Official nVelope account — replies to the local welcome message land here.
 const NVELOPE_REPLY_TO_HEX = '31844eb87bf5e0974a20287e37c5317d9115002b2b8ca06ceb8628e7764bdcab'
+
+// Resizable message-list pane. The default width is also its minimum; the
+// preview pane's minimum is ~2/3 of that default. Persisted as a client
+// setting; View → Layout → Reset Current Layout restores the defaults.
+const FOLDER_PANE_WIDTH = 208 // w-52
+const DEFAULT_LIST_WIDTH = 320 // w-80
+const MIN_LIST_WIDTH = DEFAULT_LIST_WIDTH
+const MIN_PREVIEW_WIDTH = Math.round((DEFAULT_LIST_WIDTH * 2) / 3)
 
 // Standard "> "-prefixed reply quote. Renders as a blockquote in the reader
 // (both markdown and plaintext bodies go through the markdown renderer).
@@ -139,12 +147,56 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [addingFolder, setAddingFolder] = useState(false)
+  const [listWidth, setListWidth] = useState(DEFAULT_LIST_WIDTH)
+  const panesRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     window.nvelope.settings.getAll().then((s) => {
       if (typeof s.conversationView === 'boolean') setConversationView(s.conversationView)
+      if (typeof s.listPaneWidth === 'number' && s.listPaneWidth >= MIN_LIST_WIDTH) {
+        setListWidth(s.listPaneWidth)
+      }
     }).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    return window.nvelope.layout.onReset(() => {
+      setListWidth(DEFAULT_LIST_WIDTH)
+      window.nvelope.settings.getAll().then((all) =>
+        window.nvelope.settings.setAll({ ...all, listPaneWidth: DEFAULT_LIST_WIDTH }),
+      ).catch(() => {})
+    })
+  }, [])
+
+  const persistListWidth = (width: number) => {
+    window.nvelope.settings.getAll().then((all) =>
+      window.nvelope.settings.setAll({ ...all, listPaneWidth: width }),
+    ).catch((e) => console.error('[inbox] failed to persist pane width:', e))
+  }
+
+  const handleDividerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = listWidth
+    let current = startWidth
+    const onMove = (ev: MouseEvent) => {
+      const panesWidth = panesRef.current?.clientWidth ?? Number.MAX_SAFE_INTEGER
+      const maxWidth = panesWidth - FOLDER_PANE_WIDTH - MIN_PREVIEW_WIDTH
+      current = Math.min(Math.max(startWidth + (ev.clientX - startX), MIN_LIST_WIDTH), maxWidth)
+      setListWidth(current)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      persistListWidth(current)
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   // Fall back to the first account if the selected one was removed
   useEffect(() => {
@@ -957,7 +1009,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       </header>
 
       {/* Three-pane layout */}
-      <div className="flex flex-1 overflow-hidden">
+      <div ref={panesRef} className="flex flex-1 overflow-hidden">
         {/* Folder pane */}
         <div className="w-52 border-r border-neutral-700/50 overflow-y-auto bg-neutral-900">
           <div className="p-3">
@@ -1050,7 +1102,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
         </div>
 
         {/* Mail list pane */}
-        <div className="w-80 border-r border-neutral-700/50 flex flex-col bg-neutral-900">
+        <div className="flex shrink-0 flex-col bg-neutral-900" style={{ width: listWidth }}>
           {/* Search bar */}
           <div className="border-b border-neutral-700/50 p-2">
             <div className="relative">
@@ -1234,6 +1286,12 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
             </div>
           )}
         </div>
+
+        {/* Drag divider between message list and preview */}
+        <div
+          onMouseDown={handleDividerMouseDown}
+          className="w-1 shrink-0 cursor-col-resize bg-neutral-700/50 hover:bg-blue-500/60 transition-colors"
+        />
 
         {/* Preview pane */}
         <div className="flex-1 overflow-y-auto bg-neutral-900">
