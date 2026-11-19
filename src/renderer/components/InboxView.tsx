@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, useReducer } from 'react'
 import { npubEncode } from 'nostr-tools/nip19'
 import SettingsPanel from './SettingsPanel'
 import MailBody from './MailBody'
 import ExternalReferenceList from './ExternalReferenceList'
 import IdentityChip from './IdentityChip'
+import { ensureIdentityLabel, getResolvedIdentity, subscribeIdentityLabels } from '../lib/identityLabel'
 import type { ContactRecord, OutboxProgress } from '../../preload'
 
 // Welcome message pseudo-senders: the legacy 'nvelope' string (existing
@@ -826,6 +827,10 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     if (isNvelopeWelcomeSender(mail.senderPubkey)) return 'nVelope'
     const contact = contactsByPubkey[mail.senderPubkey]
     if (contact) return contactLabel(contact, mail.senderPubkey)
+    // Non-contacts resolve asynchronously (kind-0/NIP-05) via the shared
+    // session cache — until then the bare npub is shown.
+    const resolved = getResolvedIdentity(mail.senderPubkey)
+    if (resolved) return resolved.short
     return formatNpub(mail.senderPubkey)
   }
 
@@ -898,6 +903,19 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   const selfDisplay = accounts.find((a) => a.pubkey === selectedAccount)?.displayName || 'You'
   // Every account in the identity renders as "You" in sender/recipient chips.
   const selfPubkeys = useMemo(() => accounts.map((a) => a.pubkey), [accounts])
+
+  // Re-render when a sender label resolves, and kick off resolution for every
+  // visible non-contact sender (imported mail often has no local contact).
+  const [, bumpLabelsVersion] = useReducer((v: number) => v + 1, 0)
+  useEffect(() => subscribeIdentityLabels(() => bumpLabelsVersion()), [])
+  useEffect(() => {
+    for (const m of [...mails, ...threadMails]) {
+      if (isNvelopeWelcomeSender(m.senderPubkey)) continue
+      if (selfPubkeys.includes(m.senderPubkey)) continue
+      if (contactsByPubkey[m.senderPubkey]) continue
+      ensureIdentityLabel(m.senderPubkey)
+    }
+  }, [mails, threadMails, contactsByPubkey, selfPubkeys])
 
   return (
     <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">

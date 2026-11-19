@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useReducer, useState } from 'react'
 import { npubEncode } from 'nostr-tools/nip19'
-import { chipLabelForContact, expandNip05, formatPartialNpub } from '../lib/identityLabel'
+import {
+  chipLabelForContact,
+  formatPartialNpub,
+  ensureIdentityLabel,
+  getResolvedIdentity,
+  subscribeIdentityLabels,
+} from '../lib/identityLabel'
 import type { ContactRecord } from '../../preload'
-
-// Session-level cache for non-contact label resolutions — one relay lookup
-// per pubkey per session is plenty for a stable label.
-const resolvedLabels = new Map<string, string>()
 
 interface Props {
   pubkey: string // hex, as recorded on the mail row / inner message
@@ -32,36 +34,18 @@ export default function IdentityChip({ pubkey, contactsByPubkey, selfPubkeys, la
 
   const isSelf = selfPubkeys.includes(pubkey)
   const contact = contactsByPubkey[pubkey]
-  const [fetchedLabel, setFetchedLabel] = useState<string | null>(
-    () => resolvedLabels.get(pubkey) ?? null,
-  )
+
+  // Re-render when the shared resolution cache learns a new label.
+  const [, bumpLabelsVersion] = useReducer((v: number) => v + 1, 0)
+  useEffect(() => subscribeIdentityLabels(() => bumpLabelsVersion()), [])
 
   // Non-contacts get one async kind-0/NIP-05 resolution, cached per session.
   useEffect(() => {
-    if (!npub || isSelf || contact || labelOverride || fetchedLabel) return
-    let cancelled = false
-    void (async () => {
-      const partial = formatPartialNpub(npub)
-      let label: string | null = null
-      const metadata = await window.nvelope.profile.fetchMetadata(pubkey).catch(() => null)
-      const username = metadata?.name || null
-      if (metadata?.nip05) {
-        try {
-          // Only display a NIP-05 that verifies back to this pubkey
-          const check = await window.nvelope.nip05.resolve(metadata.nip05)
-          if (check.pubkey === pubkey) label = expandNip05(metadata.nip05, username)
-        } catch {
-          // unverified — fall through to name/npub display
-        }
-      }
-      if (!label) label = username ? `${username} <${partial}>` : partial
-      resolvedLabels.set(pubkey, label)
-      if (!cancelled) setFetchedLabel(label)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [npub, pubkey, isSelf, contact, labelOverride, fetchedLabel])
+    if (!npub || isSelf || contact || labelOverride) return
+    ensureIdentityLabel(pubkey)
+  }, [npub, pubkey, isSelf, contact, labelOverride])
+
+  const fetchedLabel = getResolvedIdentity(pubkey)?.chip ?? null
 
   // Not a usable key — values from a created email are displayed as plain
   // text rather than an error state.

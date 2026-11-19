@@ -27,3 +27,60 @@ export function chipLabelForContact(c: ContactRecord): string {
   if (kind0) return `${kind0} <${partial}>`
   return partial
 }
+
+// Session-level async resolution for pubkeys that aren't contacts: one relay
+// kind-0/NIP-05 lookup per pubkey, shared by every surface (identity chips,
+// message list rows, conversation headers). `short` is the compact form for
+// list rows; `chip` follows the full chip fallback order.
+export interface ResolvedIdentity {
+  short: string
+  chip: string
+}
+
+const resolvedIdentities = new Map<string, ResolvedIdentity>()
+const pendingResolutions = new Set<string>()
+const labelListeners = new Set<() => void>()
+
+export function getResolvedIdentity(pubkey: string): ResolvedIdentity | null {
+  return resolvedIdentities.get(pubkey) ?? null
+}
+
+export function subscribeIdentityLabels(listener: () => void): () => void {
+  labelListeners.add(listener)
+  return () => {
+    labelListeners.delete(listener)
+  }
+}
+
+export function ensureIdentityLabel(pubkey: string): void {
+  if (resolvedIdentities.has(pubkey) || pendingResolutions.has(pubkey)) return
+  if (!/^[0-9a-f]{64}$/i.test(pubkey)) return
+  let npub: string
+  try {
+    npub = npubEncode(pubkey)
+  } catch {
+    return
+  }
+  pendingResolutions.add(pubkey)
+  void (async () => {
+    const partial = formatPartialNpub(npub)
+    let nip05Label: string | null = null
+    const metadata = await window.nvelope.profile.fetchMetadata(pubkey).catch(() => null)
+    const username = metadata?.name || null
+    if (metadata?.nip05) {
+      try {
+        // Only display a NIP-05 that verifies back to this pubkey
+        const check = await window.nvelope.nip05.resolve(metadata.nip05)
+        if (check.pubkey === pubkey) nip05Label = expandNip05(metadata.nip05, username)
+      } catch {
+        // unverified — fall through to name/npub display
+      }
+    }
+    resolvedIdentities.set(pubkey, {
+      short: nip05Label ?? username ?? partial,
+      chip: nip05Label ?? (username ? `${username} <${partial}>` : partial),
+    })
+    pendingResolutions.delete(pubkey)
+    for (const listener of labelListeners) listener()
+  })()
+}
