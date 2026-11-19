@@ -15,6 +15,7 @@ import { registerContactSyncHandlers } from './ipc/contactSyncHandlers'
 import { registerSubscriptionHandlers } from './ipc/subscriptionHandlers'
 import { registerRelayListHandlers } from './ipc/relayListHandlers'
 import { registerBlossomHandlers } from './ipc/blossomHandlers'
+import { registerMailTransferHandlers } from './ipc/mailTransferHandlers'
 import { stopAllScans } from './relay/scanner'
 import * as dao from './db/dao'
 
@@ -384,6 +385,7 @@ app.whenReady().then(() => {
   registerSubscriptionHandlers()
   registerRelayListHandlers()
   registerBlossomHandlers()
+  registerMailTransferHandlers()
 
   ipcMain.handle('compose:open', (_event, data: Record<string, unknown>) => {
     createComposeWindow(data)

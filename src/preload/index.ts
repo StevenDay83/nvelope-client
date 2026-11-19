@@ -219,6 +219,59 @@ export interface BlossomUploadResult {
   name?: string
 }
 
+export interface MailExportFolderOption {
+  id: number
+  name: string
+  type: string
+  count: number
+}
+
+export interface MailExportOptions {
+  folders: MailExportFolderOption[]
+  outboxCount: number
+  draftsCount: number
+}
+
+export interface MailImportSummary {
+  exportedAt: number
+  sourceAccountId: string
+  folders: Array<{ name: string; type: string; count: number }>
+  outboxCount: number
+  draftsCount: number
+  total: number
+}
+
+export interface MailImportSelection {
+  folders: Array<{ name: string; type: string }>
+  includeOutbox: boolean
+  includeDrafts: boolean
+}
+
+export interface MailTransferAPI {
+  exportOptions: (identityId: string, accountId: string) => Promise<MailExportOptions>
+  exportRun: (
+    identityId: string,
+    accountId: string,
+    selection: { folderIds: number[]; includeOutbox: boolean; includeDrafts: boolean; password?: string },
+  ) => Promise<{ canceled: boolean; path?: string; count?: number }>
+  importInspect: () => Promise<{
+    canceled: boolean
+    path?: string
+    error?: string
+    encrypted?: boolean
+    appVersion?: string
+    summary?: MailImportSummary
+  }>
+  importDecrypt: (path: string, password: string) => Promise<{ error?: string; summary?: MailImportSummary }>
+  importRun: (
+    identityId: string,
+    accountId: string,
+    path: string,
+    password: string | null,
+    selection: MailImportSelection,
+  ) => Promise<{ imported?: number; skipped?: number; foldersCreated?: number; error?: string }>
+}
+
 export interface BlossomAPI {
   upload: (identityId: string, accountId: string, serverHost: string) => Promise<BlossomUploadResult>
 }
@@ -397,6 +450,15 @@ const blossomAPI: BlossomAPI = {
   upload: (identityId, accountId, serverHost) => ipcRenderer.invoke('blossom:upload', identityId, accountId, serverHost),
 }
 
+const mailTransferAPI: MailTransferAPI = {
+  exportOptions: (identityId, accountId) => ipcRenderer.invoke('mailExport:options', identityId, accountId),
+  exportRun: (identityId, accountId, selection) => ipcRenderer.invoke('mailExport:run', identityId, accountId, selection),
+  importInspect: () => ipcRenderer.invoke('mailImport:inspect'),
+  importDecrypt: (path, password) => ipcRenderer.invoke('mailImport:decrypt', path, password),
+  importRun: (identityId, accountId, path, password, selection) =>
+    ipcRenderer.invoke('mailImport:run', identityId, accountId, path, password, selection),
+}
+
 const contactsWindowAPI: ContactsWindowAPI = {
   open: (data) => ipcRenderer.invoke('contactsWindow:open', data),
 }
@@ -420,9 +482,9 @@ const contactsListenerAPI: ContactsListenerAPI = {
   getAvatar: (identityId, accountId, pubkey) => ipcRenderer.invoke('contacts:getAvatar', identityId, accountId, pubkey),
 }
 
-contextBridge.exposeInMainWorld('nvelope', { app: appAPI, vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, relayList: relayListAPI, mail: mailListenerAPI, layout: layoutAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, blossom: blossomAPI, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
+contextBridge.exposeInMainWorld('nvelope', { app: appAPI, vault: vaultAPI, db: dbAPI, file: fileAPI, cert: certAPI, benchmark: benchmarkAPI, relay: relayAPI, relayList: relayListAPI, mail: mailListenerAPI, layout: layoutAPI, settings: settingsAPI, send: sendAPI, outbox: outboxAPI, profile: profileAPI, compose: composeAPI, nip05: nip05API, blossom: blossomAPI, mailTransfer: mailTransferAPI, contactsWindow: contactsWindowAPI, contacts: contactsListenerAPI, composeData, windowData })
 
-export type NvelopeAPI = { app: AppAPI; vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; relayList: RelayListAPI; mail: MailListenerAPI; layout: LayoutAPI; settings: SettingsAPI; send: SendAPI; outbox: OutboxAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; blossom: BlossomAPI; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
+export type NvelopeAPI = { app: AppAPI; vault: VaultAPI; db: DbAPI; file: FileAPI; cert: CertAPI; benchmark: BenchmarkAPI; relay: RelayAPI; relayList: RelayListAPI; mail: MailListenerAPI; layout: LayoutAPI; settings: SettingsAPI; send: SendAPI; outbox: OutboxAPI; profile: ProfileAPI; compose: ComposeAPI; nip05: Nip05API; blossom: BlossomAPI; mailTransfer: MailTransferAPI; contactsWindow: ContactsWindowAPI; contacts: ContactsListenerAPI; composeData?: Record<string, unknown>; windowData?: Record<string, unknown> }
 
 declare global {
   interface Window {

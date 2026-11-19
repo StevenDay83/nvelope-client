@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { npubEncode, nsecEncode, decode } from 'nostr-tools/nip19'
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 import type { ContactRecord, SubscriptionRecord } from '../../preload'
+import MailTransferSection from './MailTransferSection'
 
 interface AccountData {
   pubkey: string
@@ -598,7 +599,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
     { id: 'cache', label: 'Cache & Data' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
-    { id: 'backup', label: 'Backup' },
+    { id: 'backup', label: 'Import & Export' },
   ]
 
   return (
@@ -1239,6 +1240,7 @@ export default function SettingsPanel({ identityId, identityName, accounts, onCl
                     ))}
                   </div>
                 </div>
+                <MailTransferSection identityId={identityId} accounts={accounts} />
                 {backupStatus && <p className="text-xs text-emerald-400 break-all">{backupStatus}</p>}
               </div>
             )}
