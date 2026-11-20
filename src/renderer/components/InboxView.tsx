@@ -456,14 +456,41 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
     return toList
   }
 
-  // Reply-all targets: original sender + all original recipients, minus yourself.
-  // Only meaningful for direct mail sent to multiple recipients.
-  const getReplyAllTargets = (mail: MailRecord): string[] | null => {
+  // CC recipients (hex) from the inner message; BCC only exists on the
+  // sender's own copy (local bccList) — received BCC copies map us into To.
+  const getCcHexList = (mail: MailRecord): string[] => {
+    try {
+      const data = JSON.parse(mail.messageData)
+      if (Array.isArray(data.ccList)) return data.ccList.filter((x: unknown) => typeof x === 'string' && x.length === 64)
+    } catch { /* no cc */ }
+    return []
+  }
+
+  const getBccHexList = (mail: MailRecord): string[] => {
+    try {
+      const data = JSON.parse(mail.messageData)
+      if (Array.isArray(data.bccList)) return data.bccList.filter((x: unknown) => typeof x === 'string' && x.length === 64)
+    } catch { /* no bcc */ }
+    return []
+  }
+
+  // Reply-all: original sender goes to To (or, for your own Sent copy, the
+  // original To list); remaining visible recipients go to Cc. Bcc recipients
+  // are never replied to. Only meaningful for multi-party direct mail.
+  const getReplyAllTargets = (mail: MailRecord): { to: string[]; cc: string[] } | null => {
     if (mail.isBroadcast) return null
     const toList = getRecipientHexList(mail)
-    if (toList.length <= 1) return null
-    const targets = [...new Set([mail.senderPubkey, ...toList])].filter((pk) => pk && pk !== selectedAccount && !isNvelopeWelcomeSender(pk))
-    return targets.length > 0 ? targets : null
+    const ccList = getCcHexList(mail)
+    if (toList.length + ccList.length <= 1) return null
+    const notSelf = (pk: string) => pk && pk !== selectedAccount && !isNvelopeWelcomeSender(pk)
+    if (mail.senderPubkey !== selectedAccount && !isNvelopeWelcomeSender(mail.senderPubkey)) {
+      const to = [mail.senderPubkey]
+      const cc = [...new Set([...toList, ...ccList])].filter((pk) => notSelf(pk) && pk !== mail.senderPubkey)
+      return { to, cc }
+    }
+    const to = toList.filter(notSelf)
+    const cc = ccList.filter((pk) => notSelf(pk) && !to.includes(pk))
+    return to.length + cc.length > 0 ? { to, cc } : null
   }
 
   // Sent/Outbox rows show the recipient; everything else shows the sender.
@@ -678,7 +705,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       accountId: selectedAccount,
       accountDisplayName: acct?.displayName || undefined,
       accountNpub: acct ? npubEncode(acct.pubkey) : undefined,
-      recipientNpub: targets.map((pk) => npubEncode(pk)).join('; '),
+      recipientNpub: targets.to.map((pk) => npubEncode(pk)).join('; '),
+      recipientCc: targets.cc.length > 0 ? targets.cc.map((pk) => npubEncode(pk)).join('; ') : undefined,
       subject: replySubject,
       body: replyBody,
       format: 'plaintext',
@@ -710,12 +738,16 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
   const handleEditDraft = (mail: MailRecord) => {
     const acct = accounts.find((a) => a.pubkey === selectedAccount)
     let recipient = ''
+    let recipientCc = ''
+    let recipientBcc = ''
     let draftSubject = mail.subject || ''
     let draftBody = ''
     let draftFormat: 'plaintext' | 'markdown' | 'html' = 'plaintext'
     try {
       const data = JSON.parse(mail.messageData)
       if (typeof data.recipientNpub === 'string') recipient = data.recipientNpub
+      if (typeof data.recipientCc === 'string') recipientCc = data.recipientCc
+      if (typeof data.recipientBcc === 'string') recipientBcc = data.recipientBcc
       if (typeof data.subjectLine === 'string') draftSubject = data.subjectLine
       if (data.formats && typeof data.formats === 'object') {
         const key = Object.keys(data.formats)[0]
@@ -731,6 +763,8 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
       accountDisplayName: acct?.displayName || undefined,
       accountNpub: acct ? npubEncode(acct.pubkey) : undefined,
       recipientNpub: recipient || undefined,
+      recipientCc: recipientCc || undefined,
+      recipientBcc: recipientBcc || undefined,
       subject: draftSubject || undefined,
       body: draftBody || undefined,
       format: draftFormat,
@@ -889,7 +923,7 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
 
   // A draft's recipient/subject live in messageData (recipientNpub /
   // subjectLine), not in the typed columns.
-  const getDraftField = (mail: MailRecord, field: 'recipientNpub' | 'subjectLine'): string => {
+  const getDraftField = (mail: MailRecord, field: 'recipientNpub' | 'recipientCc' | 'recipientBcc' | 'subjectLine'): string => {
     try {
       const value = JSON.parse(mail.messageData)[field]
       return typeof value === 'string' ? value : ''
@@ -1490,6 +1524,34 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                                     )}
                                   </div>
                                 )}
+                                {!m.isBroadcast && getCcHexList(m).length > 0 && (
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <span className="text-neutral-600">Cc:</span>
+                                    {getCcHexList(m).map((hex) => (
+                                      <IdentityChip
+                                        key={hex}
+                                        pubkey={hex}
+                                        contactsByPubkey={contactsByPubkey}
+                                        selfPubkeys={selfPubkeys}
+                                        onAddContact={handleAddContact}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+                                {!m.isBroadcast && getBccHexList(m).length > 0 && (
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <span className="text-neutral-600">Bcc:</span>
+                                    {getBccHexList(m).map((hex) => (
+                                      <IdentityChip
+                                        key={hex}
+                                        pubkey={hex}
+                                        contactsByPubkey={contactsByPubkey}
+                                        selfPubkeys={selfPubkeys}
+                                        onAddContact={handleAddContact}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                               <div className="mb-3 flex items-center gap-1">
                                 <button
@@ -1578,6 +1640,46 @@ export default function InboxView({ identityId, accounts, onAccountsChanged, onL
                             ))
                           )}
                         </div>
+                        {selectedIsDraft && !!getDraftField(selectedMail, 'recipientCc') && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+                            <span className="text-neutral-600">Cc:</span>
+                            <span>{getDraftField(selectedMail, 'recipientCc')}</span>
+                          </div>
+                        )}
+                        {selectedIsDraft && !!getDraftField(selectedMail, 'recipientBcc') && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+                            <span className="text-neutral-600">Bcc:</span>
+                            <span>{getDraftField(selectedMail, 'recipientBcc')}</span>
+                          </div>
+                        )}
+                        {!selectedIsDraft && !selectedMail.isBroadcast && getCcHexList(selectedMail).length > 0 && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+                            <span className="text-neutral-600">Cc:</span>
+                            {getCcHexList(selectedMail).map((hex) => (
+                              <IdentityChip
+                                key={hex}
+                                pubkey={hex}
+                                contactsByPubkey={contactsByPubkey}
+                                selfPubkeys={selfPubkeys}
+                                onAddContact={handleAddContact}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        {!selectedIsDraft && !selectedMail.isBroadcast && getBccHexList(selectedMail).length > 0 && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+                            <span className="text-neutral-600">Bcc:</span>
+                            {getBccHexList(selectedMail).map((hex) => (
+                              <IdentityChip
+                                key={hex}
+                                pubkey={hex}
+                                contactsByPubkey={contactsByPubkey}
+                                selfPubkeys={selfPubkeys}
+                                onAddContact={handleAddContact}
+                              />
+                            ))}
+                          </div>
+                        )}
                         <div className="text-xs text-neutral-500 mt-0.5">
                           {formatDateFull(selectedMail.createdAt)}
                           {selectedMail.isBroadcast ? (

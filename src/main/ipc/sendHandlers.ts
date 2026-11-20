@@ -301,6 +301,8 @@ export function registerSendHandlers(): void {
       draftId: string | null,
       payload: {
         recipientNpub?: string
+        recipientCc?: string
+        recipientBcc?: string
         subject?: string
         body?: string
         format?: 'plaintext' | 'markdown' | 'html'
@@ -331,6 +333,8 @@ export function registerSendHandlers(): void {
       const messageData = JSON.stringify({
         draftId: id,
         recipientNpub: payload.recipientNpub ?? '',
+        recipientCc: payload.recipientCc ?? '',
+        recipientBcc: payload.recipientBcc ?? '',
         subjectLine: payload.subject ?? '',
         messageType: 0,
         formats: {

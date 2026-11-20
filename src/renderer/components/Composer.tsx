@@ -21,6 +21,8 @@ interface Props {
   accountDisplayName?: string
   accountNpub?: string
   initialRecipient?: string
+  initialCc?: string
+  initialBcc?: string
   initialSubject?: string
   initialBody?: string
   initialFormat?: 'plaintext' | 'markdown' | 'html'
@@ -39,6 +41,8 @@ export default function Composer({
   accountDisplayName,
   accountNpub,
   initialRecipient = '',
+  initialCc = '',
+  initialBcc = '',
   initialSubject = '',
   initialBody = '',
   initialFormat = 'plaintext',
@@ -51,6 +55,14 @@ export default function Composer({
 }: Props) {
   const [chips, setChips] = useState<RecipientChip[]>(() => parseChips(initialRecipient))
   const [pendingTo, setPendingTo] = useState('')
+  // CC/BCC are optional fields (Thunderbird-style): hidden behind toggle
+  // buttons until used, shown from the start when a draft carries them.
+  const [ccChips, setCcChips] = useState<RecipientChip[]>(() => parseChips(initialCc))
+  const [pendingCc, setPendingCc] = useState('')
+  const [bccChips, setBccChips] = useState<RecipientChip[]>(() => parseChips(initialBcc))
+  const [pendingBcc, setPendingBcc] = useState('')
+  const [showCc, setShowCc] = useState(!!initialCc)
+  const [showBcc, setShowBcc] = useState(!!initialBcc)
   const [subject, setSubject] = useState(initialSubject)
   const [body, setBody] = useState(initialBody)
   const [format, setFormat] = useState<'plaintext' | 'markdown' | 'html'>(initialFormat)
@@ -133,6 +145,27 @@ export default function Composer({
   // Recipients are chips; drafts persist them as the legacy ';'-joined string
   // (npub where resolved, raw input otherwise).
   const recipientString = useMemo(() => serializeChips(chips, pendingTo), [chips, pendingTo])
+  const ccString = useMemo(() => serializeChips(ccChips, pendingCc), [ccChips, pendingCc])
+  const bccString = useMemo(() => serializeChips(bccChips, pendingBcc), [bccChips, pendingBcc])
+
+  // Thunderbird-style field removal: empty fields collapse straight back to a
+  // toggle button; fields with addresses ask first.
+  const makeFieldRemover = (
+    fieldChips: RecipientChip[],
+    fieldPending: string,
+    clear: () => void,
+    label: string,
+  ) => () => {
+    if (fieldChips.length === 0 && !fieldPending.trim()) {
+      clear()
+      return
+    }
+    if (window.confirm(`Remove ${label} Addresses\n\nAre you sure you want to remove the ${label} addresses?`)) {
+      clear()
+    }
+  }
+  const removeCcField = makeFieldRemover(ccChips, pendingCc, () => { setCcChips([]); setPendingCc(''); setShowCc(false) }, 'Cc')
+  const removeBccField = makeFieldRemover(bccChips, pendingBcc, () => { setBccChips([]); setPendingBcc(''); setShowBcc(false) }, 'Bcc')
 
   // Pubkeys currently chipped (address book checkbox state)
   const chipPubkeys = useMemo(
@@ -164,10 +197,12 @@ export default function Composer({
   // Autosave draft every 10s
   useEffect(() => {
     const timer = setInterval(async () => {
-      if (!recipientString && !subject && !body) return
+      if (!recipientString && !ccString && !bccString && !subject && !body) return
       try {
         const result = await window.nvelope.send.saveDraft(identityId, accountId, draftId, {
           recipientNpub: recipientString || undefined,
+          recipientCc: ccString || undefined,
+          recipientBcc: bccString || undefined,
           subject: subject || undefined,
           body: body || undefined,
           format,
@@ -179,7 +214,7 @@ export default function Composer({
       }
     }, 10000)
     return () => clearInterval(timer)
-  }, [recipientString, subject, body, format, identityId, accountId, draftId, initialThreadId])
+  }, [recipientString, ccString, bccString, subject, body, format, identityId, accountId, draftId, initialThreadId])
 
   const insertFormat = useCallback((before: string, after: string) => {
     const el = textareaRef.current
@@ -197,8 +232,8 @@ export default function Composer({
   }, [])
 
   const handleSend = async () => {
-    const pending = pendingTo.trim()
-    if (chips.length === 0 && !pending) {
+    const pending = pendingTo.trim() || pendingCc.trim() || pendingBcc.trim()
+    if (chips.length === 0 && ccChips.length === 0 && bccChips.length === 0 && !pending) {
       setError('Please add at least one recipient (contact, npub, or user@domain)')
       return
     }
@@ -210,12 +245,13 @@ export default function Composer({
       setError('Please enter a subject or body')
       return
     }
-    const resolving = chips.filter((c) => c.status === 'resolving')
+    const allChips = [...chips, ...ccChips, ...bccChips]
+    const resolving = allChips.filter((c) => c.status === 'resolving')
     if (resolving.length > 0) {
       setError('Still resolving recipients — please wait a moment')
       return
     }
-    const invalid = chips.filter((c) => c.status === 'invalid')
+    const invalid = allChips.filter((c) => c.status === 'invalid')
     if (invalid.length > 0) {
       setError(
         `Cannot send to: ${invalid.map((c) => `${c.label} (${c.invalidReason ?? 'invalid recipient'})`).join(', ')}`,
@@ -225,13 +261,23 @@ export default function Composer({
     setSending(true)
     setError('')
     try {
-      const resolved: string[] = []
-      for (const chip of chips) {
-        if (chip.npub && !resolved.includes(chip.npub)) resolved.push(chip.npub)
+      // Dedupe with To > Cc > Bcc priority (the send pipeline dedupes again
+      // by hex, but this keeps the wire payload clean).
+      const collect = (list: RecipientChip[], exclude: string[]): string[] => {
+        const out: string[] = []
+        for (const chip of list) {
+          if (chip.npub && !exclude.includes(chip.npub) && !out.includes(chip.npub)) out.push(chip.npub)
+        }
+        return out
       }
+      const resolved = collect(chips, [])
+      const resolvedCc = collect(ccChips, resolved)
+      const resolvedBcc = collect(bccChips, [...resolved, ...resolvedCc])
       setProgress('Queueing…')
       await window.nvelope.send.queue(identityId, accountId, {
         recipients: resolved,
+        cc: resolvedCc.length > 0 ? resolvedCc : undefined,
+        bcc: resolvedBcc.length > 0 ? resolvedBcc : undefined,
         subject: subject.trim(),
         body: body.trim(),
         format,
@@ -262,6 +308,8 @@ export default function Composer({
     try {
       const result = await window.nvelope.send.saveDraft(identityId, accountId, draftId, {
         recipientNpub: recipientString || undefined,
+        recipientCc: ccString || undefined,
+        recipientBcc: bccString || undefined,
         subject: subject || undefined,
         body: body || undefined,
         format,
@@ -277,10 +325,12 @@ export default function Composer({
 
   // Close keeps any content as a draft (autosave-on-close), then closes.
   const handleClose = async () => {
-    if (recipientString || subject || body) {
+    if (recipientString || ccString || bccString || subject || body) {
       try {
         const result = await window.nvelope.send.saveDraft(identityId, accountId, draftId, {
           recipientNpub: recipientString || undefined,
+          recipientCc: ccString || undefined,
+          recipientBcc: bccString || undefined,
           subject: subject || undefined,
           body: body || undefined,
           format,
@@ -410,6 +460,29 @@ export default function Composer({
         <div className="flex items-center border-b border-neutral-800 px-3">
           <label className="w-16 shrink-0 text-sm text-neutral-500">From</label>
           <div className="flex-1 py-2 text-sm text-neutral-300">{fromLabel}</div>
+          {/* CC/BCC field toggles (hidden once the field is shown) */}
+          {(!showCc || !showBcc) && (
+            <div className="flex items-center gap-1">
+              {!showCc && (
+                <button
+                  type="button"
+                  onClick={() => setShowCc(true)}
+                  className="rounded px-2 py-0.5 text-sm text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300 transition-colors"
+                >
+                  Cc
+                </button>
+              )}
+              {!showBcc && (
+                <button
+                  type="button"
+                  onClick={() => setShowBcc(true)}
+                  className="rounded px-2 py-0.5 text-sm text-neutral-500 hover:bg-neutral-800 hover:text-neutral-300 transition-colors"
+                >
+                  Bcc
+                </button>
+              )}
+            </div>
+          )}
         </div>
         {/* To */}
         <div className="relative flex items-start border-b border-neutral-800 px-3">
@@ -476,6 +549,52 @@ export default function Composer({
             </>
           )}
         </div>
+        {/* Cc (optional) — × at the left edge removes the field */}
+        {showCc && (
+          <div className="relative flex items-start border-b border-neutral-800 px-3">
+            <button
+              type="button"
+              onClick={removeCcField}
+              title="Remove Cc addresses"
+              className="absolute left-0.5 top-2.5 rounded px-0.5 text-sm text-neutral-500 hover:text-red-400 transition-colors"
+            >
+              ×
+            </button>
+            <label className="w-16 shrink-0 py-2.5 pl-2 text-sm text-neutral-500">Cc</label>
+            <RecipientChipsInput
+              identityId={identityId}
+              accountId={accountId}
+              contacts={contacts}
+              chips={ccChips}
+              onChipsChange={setCcChips}
+              pendingText={pendingCc}
+              onPendingTextChange={setPendingCc}
+            />
+          </div>
+        )}
+        {/* Bcc (optional) — × at the left edge removes the field */}
+        {showBcc && (
+          <div className="relative flex items-start border-b border-neutral-800 px-3">
+            <button
+              type="button"
+              onClick={removeBccField}
+              title="Remove Bcc addresses"
+              className="absolute left-0.5 top-2.5 rounded px-0.5 text-sm text-neutral-500 hover:text-red-400 transition-colors"
+            >
+              ×
+            </button>
+            <label className="w-16 shrink-0 py-2.5 pl-2 text-sm text-neutral-500">Bcc</label>
+            <RecipientChipsInput
+              identityId={identityId}
+              accountId={accountId}
+              contacts={contacts}
+              chips={bccChips}
+              onChipsChange={setBccChips}
+              pendingText={pendingBcc}
+              onPendingTextChange={setPendingBcc}
+            />
+          </div>
+        )}
         {/* Subject */}
         <div className="flex items-center px-3">
           <label className="w-16 shrink-0 text-sm text-neutral-500">Subject</label>

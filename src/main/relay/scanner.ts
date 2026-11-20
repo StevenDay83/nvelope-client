@@ -88,7 +88,11 @@ async function storeDirectMail(
   console.log(`[scanner] storeDirectMail: bodyText length=${bodyText.length} formats=${JSON.stringify(formats)}`)
   const messageData = JSON.stringify({
     mailFrom: msg.getFrom(),
+    // If this was our BCC copy, fromWire appended us (bccTo) to the To list —
+    // matching legacy email, where a BCC'd recipient sees the visible
+    // recipients plus themselves (SPEC §3.1).
     mailToList: msg.getRecipientsTo(),
+    ccList: msg.getCcList(),
     replyTo: msg.getReplyTo() || null,
     subjectLine: subject,
     messageType,

@@ -148,6 +148,8 @@ export interface SendAPI {
     accountId: string,
     payload: {
       recipients: string[]
+      cc?: string[]
+      bcc?: string[]
       subject: string
       body: string
       format: 'plaintext' | 'markdown' | 'html'
@@ -167,6 +169,8 @@ export interface SendAPI {
     draftId: string | null,
     payload: {
       recipientNpub?: string
+      recipientCc?: string
+      recipientBcc?: string
       subject?: string
       body?: string
       format?: 'plaintext' | 'markdown' | 'html'

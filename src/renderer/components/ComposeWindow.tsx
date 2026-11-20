@@ -13,6 +13,8 @@ export default function ComposeWindow({ data }: Props) {
         accountDisplayName={data.accountDisplayName ? String(data.accountDisplayName) : undefined}
         accountNpub={data.accountNpub ? String(data.accountNpub) : undefined}
         initialRecipient={data.recipientNpub ? String(data.recipientNpub) : undefined}
+        initialCc={data.recipientCc ? String(data.recipientCc) : undefined}
+        initialBcc={data.recipientBcc ? String(data.recipientBcc) : undefined}
         initialSubject={data.subject ? String(data.subject) : undefined}
         initialBody={data.body ? String(data.body) : undefined}
         initialFormat={(data.format as 'plaintext' | 'markdown' | 'html') ?? 'plaintext'}

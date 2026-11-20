@@ -32,7 +32,9 @@ import * as dao from '../db/dao'
 const MAX_EXTERNAL_REFERENCES = 10
 
 export interface OutgoingPayload {
-  recipients: string[] // npubs
+  recipients: string[] // npubs (To)
+  cc?: string[] // npubs (CC)
+  bcc?: string[] // npubs (BCC)
   subject: string
   body: string
   format: 'plaintext' | 'markdown' | 'html'
@@ -46,6 +48,8 @@ export interface OutgoingPayload {
 
 interface SendPayloadWire {
   recipients: string[]
+  cc: string[]
+  bcc: string[]
   subject: string
   body: string
   format: 'plaintext' | 'markdown' | 'html'
@@ -81,8 +85,26 @@ function validateLinks(links: string[]): string[] {
 
 function buildMessage(payload: SendPayloadWire, fromPubkey: string): DirectMessage {
   const message = new DirectMessage().setFrom(fromPubkey).setSubject(payload.subject)
+  // Dedupe across lists with To > Cc > Bcc priority — being in two lists
+  // would produce two envelopes (and a BCC private copy defeats the point).
+  const seen = new Set<string>()
   for (const npub of payload.recipients) {
-    message.addRecipientTo(npubToHex(npub))
+    const hex = npubToHex(npub)
+    if (seen.has(hex)) continue
+    seen.add(hex)
+    message.addRecipientTo(hex)
+  }
+  for (const npub of payload.cc ?? []) {
+    const hex = npubToHex(npub)
+    if (seen.has(hex)) continue
+    seen.add(hex)
+    message.addCc(hex)
+  }
+  for (const npub of payload.bcc ?? []) {
+    const hex = npubToHex(npub)
+    if (seen.has(hex)) continue
+    seen.add(hex)
+    message.addBcc(hex)
   }
   switch (payload.format) {
     case 'html':
@@ -322,7 +344,11 @@ export function registerOutboxHandlers(): void {
       if (!session) throw new Error('Identity is locked')
       const account = session.payload.accounts.find((a) => a.pubkey === accountId)
       if (!account) throw new Error('Account not found')
-      if (!Array.isArray(payload.recipients) || payload.recipients.length === 0) {
+      if (
+        (!Array.isArray(payload.recipients) || payload.recipients.length === 0) &&
+        (!Array.isArray(payload.cc) || payload.cc.length === 0) &&
+        (!Array.isArray(payload.bcc) || payload.bcc.length === 0)
+      ) {
         throw new Error('At least one recipient is required')
       }
 
@@ -332,7 +358,9 @@ export function registerOutboxHandlers(): void {
       const threadId = payload.threadId ?? randomBytes(16).toString('hex')
 
       const wire: SendPayloadWire = {
-        recipients: payload.recipients,
+        recipients: payload.recipients ?? [],
+        cc: payload.cc ?? [],
+        bcc: payload.bcc ?? [],
         subject: payload.subject,
         body: payload.body,
         format: payload.format,
@@ -340,21 +368,23 @@ export function registerOutboxHandlers(): void {
         threadId,
       }
 
-      // The inner event id is deterministic for To recipients (SPEC §8) —
+      // The inner event id is deterministic for the shared body (SPEC §8) —
       // compute it now so the queue row carries the canonical identity.
       const message = buildMessage(wire, accountId)
       const innerEventId = createDirectMessageEvent(message, secretKey).id
 
       const db = getDb(identityId)
       const outbox = dao.getSpecialFolder(db, accountId, 'outbox')
-      const recipientHexes = payload.recipients.map(npubToHex)
+      const recipientHexes = wire.recipients.map(npubToHex)
+      const ccHexes = wire.cc.map(npubToHex).filter((h) => !recipientHexes.includes(h))
+      const bccHexes = wire.bcc.map(npubToHex).filter((h) => !recipientHexes.includes(h) && !ccHexes.includes(h))
       dao.insertMail(db, {
         innerEventId,
         accountId,
         folderId: outbox?.id ?? null,
         state: 'pending',
         senderPubkey: accountId,
-        recipientPubkey: recipientHexes[0] ?? null,
+        recipientPubkey: recipientHexes[0] ?? ccHexes[0] ?? bccHexes[0] ?? null,
         subject: payload.subject || null,
         threadId,
         isBroadcast: 0,
@@ -364,6 +394,10 @@ export function registerOutboxHandlers(): void {
         messageData: JSON.stringify({
           mailFrom: accountId,
           mailToList: recipientHexes,
+          ccList: ccHexes,
+          // Local-only: the sender's own copy shows its BCC list. On the wire
+          // each BCC recipient's private copy carries only bccTo (SPEC §3.1).
+          bccList: bccHexes,
           subjectLine: payload.subject,
           messageType: 0,
           formats: { [payload.format]: payload.body },
