@@ -1,6 +1,6 @@
 import { Notification } from 'electron'
 import { decode } from 'nostr-tools/nip19'
-import { SimplePool } from 'nostr-tools'
+import { SimplePool, type Filter } from 'nostr-tools'
 import {
   NvelopeClient,
   NostrToolsTransport,
@@ -36,6 +36,10 @@ function decodeNsec(nsec: string): Uint8Array {
 // events that arrive just after a scan's cutoff would otherwise be missed
 // forever. Duplicates are filtered by the envelope-id check on store.
 const SCAN_OVERLAP_SECONDS = 60 * 60
+
+const PROFILE_KIND = 30998
+const CERT_D_TAG = 'nv_public_key'
+const POLICY_D_TAG = 'nv_recipient_profile'
 
 function getSinceForAccount(settings: VaultPayload['settings'], pubkey: string): number | undefined {
   const lastRetrieved = settings.lastRetrievedPerAccount?.[pubkey]
@@ -250,6 +254,7 @@ async function scanIdentity(
       for (const rej of directResult.rejected) {
         console.log(`[scanner]   Rejected: sender=${rej.senderPubkey.slice(0, 16)}... reason=${rej.reason}${rej.requiredTarget ? ' target=' + rej.requiredTarget : ''}`)
       }
+      const newNonContactSenders = new Set<string>()
       for (let i = 0; i < directResult.inbox.length; i++) {
         const mail = directResult.inbox[i]!
         const msg = mail.message
@@ -260,9 +265,26 @@ async function scanIdentity(
           if (await storeDirectMail(identityId, account.pubkey, mail)) {
             directCount++
             console.log(`[scanner] Stored mail ${i + 1} OK, directCount=${directCount}`)
+            if (dao.getContact(db, account.pubkey, mail.senderPubkey) === null) {
+              newNonContactSenders.add(mail.senderPubkey)
+            }
           }
         } catch (e) {
           console.error(`[scanner] Storing mail ${i + 1} FAILED:`, e)
+        }
+      }
+
+      // Warm the cert/policy cache for new non-contact senders so a reply
+      // chip resolves immediately instead of showing a stale "no mail
+      // certificate". Contacts are already covered by contact sync.
+      if (newNonContactSenders.size > 0) {
+        const authors = [...newNonContactSenders]
+        try {
+          await transport.query({ kinds: [PROFILE_KIND], authors, '#d': [CERT_D_TAG] } as Filter, relays)
+          await transport.query({ kinds: [PROFILE_KIND], authors, '#d': [POLICY_D_TAG] } as Filter, relays)
+          console.log(`[scanner] Warmed cert/policy cache for ${authors.length} non-contact sender(s)`)
+        } catch (e) {
+          console.error('[scanner] cert/policy warm error:', e)
         }
       }
 
